@@ -1,4 +1,4 @@
-package com.example.roottap.ui.theme
+package dev.roottap.mobile.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

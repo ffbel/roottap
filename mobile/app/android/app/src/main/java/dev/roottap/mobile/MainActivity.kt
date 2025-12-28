@@ -1,4 +1,4 @@
-package com.example.roottap
+package dev.roottap.mobile
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -11,7 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import com.example.roottap.ui.theme.RootTapTheme
+import dev.roottap.mobile.ui.theme.RootTapTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

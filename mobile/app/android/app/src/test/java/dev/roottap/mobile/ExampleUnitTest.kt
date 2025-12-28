@@ -1,4 +1,4 @@
-package com.example.roottap
+package dev.roottap.mobile
 
 import org.junit.Test
 

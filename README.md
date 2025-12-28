@@ -43,6 +43,7 @@ sequenceDiagram
 
 ## Documentation
 
+- [System setup](docs/setup/SETUP_ARCH.md)
 - [Architecture overview](docs/architecture.md)
 - [Protocol details](docs/protocol.md)
 - [Threat model](docs/threat-model.md)

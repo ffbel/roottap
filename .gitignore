@@ -1,0 +1,122 @@
+############################
+# General
+############################
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+.DS_Store
+Thumbs.db
+
+############################
+# VS Code
+############################
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+############################
+# ESP-IDF (ESP32)
+############################
+# Build output
+build/
+sdkconfig
+sdkconfig.old
+
+# ESP-IDF tooling
+.dependencies/
+managed_components/
+.espressif/
+idf-build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Flash artifacts
+*.bin
+*.elf
+*.map
+*.hex
+
+############################
+# Android (Gradle / Studio)
+############################
+# Gradle
+.gradle/
+**/build/
+
+# Android Studio
+.idea/
+*.iml
+local.properties
+
+# Android NDK / CMake
+.externalNativeBuild/
+.cxx/
+
+# Android captures
+captures/
+
+############################
+# iOS / Xcode
+############################
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# User settings
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+############################
+# Kotlin / Java
+############################
+*.class
+*.jar
+
+############################
+# Python
+############################
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+############################
+# Linux / Arch
+############################
+.cache/
+.local/
+.config/
+
+############################
+# Secrets / Keys (IMPORTANT)
+############################
+# Never commit private keys or credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.der
+*.keystore
+*.jks
+*.env
+
+############################
+# CI / tooling output
+############################
+coverage/
+reports/
+
+############################
+# Optional: firmware OTA artifacts
+############################
+firmware/**/*.signed
+firmware/**/*.encrypted
+firmware/**/*.ota

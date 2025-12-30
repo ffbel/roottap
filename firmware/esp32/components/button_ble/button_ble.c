@@ -12,6 +12,10 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
+#include "os/os_mbuf.h"
+#include "host/ble_gatt.h"
+#include "host/ble_hs_mbuf.h" 
+
 #include "button.h"
 
 static const char *TAG = "button_ble";
@@ -23,12 +27,29 @@ static const ble_uuid128_t UUID_SVC_UP = BLE_UUID128_INIT(
 static const ble_uuid128_t UUID_CHR_CONFIRM = BLE_UUID128_INIT(
     0x5a,0x1c,0x2e,0x6f,0x8c,0x77,0x4b,0x6a,0x9e,0x2f,0x21,0xa0,0x9b,0x11,0x73,0xd2);
 
+static const ble_uuid128_t UUID_CHR_REQUEST = BLE_UUID128_INIT(
+    0x5a,0x1c,0x2e,0x6f,0x8c,0x77,0x4b,0x6a,0x9e,0x2f,0x21,0xa0,0x9b,0x11,0x73,0xd3);
+
 static uint16_t g_confirm_handle;
+static uint16_t g_request_handle = 0;
+static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static uint8_t g_last_request_value = 0;  // 0/1 just for reads
 static QueueHandle_t s_evt_q;
 
-QueueHandle_t button_get_event_queue(void) {
-    return s_evt_q;
+esp_err_t button_ble_request_approval(void) {
+    if (g_request_handle == 0) return ESP_ERR_INVALID_STATE;
+    if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+
+    uint8_t v = 1; // payload doesn't matter for now
+
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&v, sizeof(v));
+    if (!om) return ESP_ERR_NO_MEM;
+
+    int rc = ble_gatts_notify_custom(g_conn_handle, g_request_handle, om);
+
+    return rc == 0 ? ESP_OK : ESP_FAIL;
 }
+
 
 // ---- GATT callback: phone writes "confirm" here
 static int confirm_access_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -47,17 +68,41 @@ static int confirm_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 
     ESP_LOGI(TAG, "BLE confirm write, len=%d", len);
 
-    button_event_t ev = {.type = BUTTON_EVENT_PRESSED};
-    (void)xQueueSend(s_evt_q, &ev, 0);
+    button_publish((button_event_t){
+        .type = (buf[0] == 1) ? EV_APPROVE : EV_DENY
+    });
 
     return 0;
 }
+
+static int request_access_cb(uint16_t conn_handle,
+                             uint16_t attr_handle,
+                             struct ble_gatt_access_ctxt *ctxt,
+                             void *arg)
+{
+    // We only support READ on this characteristic.
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    // Return 1 byte so the characteristic has a valid "value".
+    return os_mbuf_append(ctxt->om, &g_last_request_value, sizeof(g_last_request_value)) == 0
+           ? 0
+           : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
 
 static const struct ble_gatt_svc_def gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
         .uuid = &UUID_SVC_UP.u,
         .characteristics = (struct ble_gatt_chr_def[]) {
+            {
+                .uuid = &UUID_CHR_REQUEST.u,
+                .access_cb = request_access_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &g_request_handle,
+            },
             {
                 .uuid = &UUID_CHR_CONFIRM.u,
                 .access_cb = confirm_access_cb,
@@ -77,7 +122,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
     switch (event->type) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
-                ESP_LOGI(TAG, "Connected");
+                g_conn_handle = event->connect.conn_handle;
+                ESP_LOGI(TAG, "Connected (handle=%d)", g_conn_handle);
             } else {
                 ESP_LOGW(TAG, "Connect failed; status=%d", event->connect.status);
                 ble_app_advertise();
@@ -86,6 +132,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "Disconnected");
+            g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
             ble_app_advertise();
             return 0;
 
@@ -135,6 +182,13 @@ static void ble_app_advertise(void)
 
 static void ble_on_sync(void)
 {
+    int rc = ble_gatts_start();
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_start rc=%d", rc);
+        return;
+    }
+    ESP_LOGI(TAG, "request_handle=%u", g_request_handle);
+
     // Ensure we have an address
     ble_app_advertise();
 }
@@ -163,9 +217,12 @@ esp_err_t button_ble_init(void)
 
     // Add our service
     int rc = ble_gatts_count_cfg(gatt_svcs);
+    ESP_LOGE(TAG, "count_cfg rc=%d", rc);
     if (rc != 0) return ESP_FAIL;
 
     rc = ble_gatts_add_svcs(gatt_svcs);
+    ESP_LOGE(TAG, "add_svcs rc=%d", rc);
+    // ESP_LOGI(TAG, "request_handle=%u", g_request_handle);
     if (rc != 0) return ESP_FAIL;
 
     ble_hs_cfg.sync_cb = ble_on_sync;

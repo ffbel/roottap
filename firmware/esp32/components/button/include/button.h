@@ -3,23 +3,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+typedef enum { EV_REQUEST=1, EV_APPROVE=2, EV_DENY=3 } event_type_t;
 
-typedef enum {
-    BUTTON_EVENT_PRESSED = 1,
-    BUTTON_EVENT_RELEASED = 2,
-} button_event_type_t;
+typedef struct { event_type_t type; } button_event_t;
 
-typedef struct {
-    button_event_type_t type;
-    int64_t timestamp_us;
-} button_event_t;
-
-// Backends will create + own this queue. App reads from it.
+void button_init(void);
 QueueHandle_t button_get_event_queue(void);
-
-#ifdef __cplusplus
-}
-#endif
+bool button_publish(button_event_t ev);

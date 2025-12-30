@@ -3,8 +3,12 @@
 #include "freertos/task.h"
 
 #include "button.h"
+#include "button_gpio.h"
 #include "button_ble.h"
 #include "led.h"
+#include "esp_log.h"
+
+static const char *TAG = "main";
 
 #define LED_GPIO GPIO_NUM_21   // adjust if LED uses a different pin
 
@@ -30,22 +34,39 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(500));
     init_nvs();
 
-    // ESP_ERROR_CHECK(button_gpio_init());
+    button_init();
+    ESP_ERROR_CHECK(button_gpio_init());
 
 
     led_t led;
     led_init(&led, LED_GPIO, true);
 
+    vTaskDelay(pdMS_TO_TICKS(500));
     ESP_ERROR_CHECK(button_ble_init());
 
     QueueHandle_t q = button_get_event_queue();
     button_event_t ev;
 
+    bool pending = false;
+
     while (1) {
         if (xQueueReceive(q, &ev, portMAX_DELAY)) {
-            if (ev.type == BUTTON_EVENT_PRESSED) {
-                led_toggle(&led);
-                printf("toggle LED (BLE confirm)\n");
+
+            if (ev.type == EV_REQUEST && !pending) {
+                pending = true;
+                ESP_LOGI(TAG, "Request -> notify phone");
+                button_ble_request_approval();   // 🔔 notify phone
+            }
+
+            if (ev.type == EV_APPROVE && pending) {
+                pending = false;
+                led_toggle(&led);                // ✅ toggle ONLY here
+            }
+
+            if (ev.type == EV_DENY && pending) {
+                pending = false;
+                ESP_LOGI(TAG, "Request -> denied");
+                // optional: indicate deny
             }
         }
     }

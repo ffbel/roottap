@@ -4,7 +4,15 @@ import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
+
+enum class ConnectionState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED
+}
 
 class GattClient(
     private val context: Context,
@@ -12,9 +20,13 @@ class GattClient(
     private val notifyCharUuid: UUID,
     private val writeCharUuid: UUID,
 ) {
+    private var device: BluetoothDevice? = null
     private var gatt: BluetoothGatt? = null
     private var notifyChar: BluetoothGattCharacteristic? = null
     private var writeChar: BluetoothGattCharacteristic? = null
+
+    private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    val connectionState = _connectionState.asStateFlow()
 
     private val cccdUuid: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private val tag = "RootTapGatt"
@@ -22,28 +34,51 @@ class GattClient(
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
+        this.device = device
         Log.d(tag, "Connecting to ${device.address} ...")
+        _connectionState.value = ConnectionState.CONNECTING
         gatt = device.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        gatt?.disconnect()
-        gatt?.close()
-        gatt = null
+        Log.d(tag, "Disconnecting from ${device?.address}")
+        // No auto-reconnect if user calls this
+        device = null
+        if (gatt != null) {
+            gatt?.disconnect()
+            close()
+        } else {
+            _connectionState.value = ConnectionState.DISCONNECTED
+        }
     }
 
-    private val cb = object : BluetoothGattCallback() {
+    @SuppressLint("MissingPermission")
+    private fun close() {
+        gatt?.close()
+        gatt = null
+        _connectionState.value = ConnectionState.DISCONNECTED
+    }
+
+
+    private val cb: BluetoothGattCallback = object : BluetoothGattCallback() {
 
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.d(tag, "conn state status=$status newState=$newState")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d(tag, "Connected, discovering services...")
+                _connectionState.value = ConnectionState.CONNECTED
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(tag, "Disconnected")
-                disconnect()
+                close()
+                // if device is not null, it means we want to reconnect
+                device?.let {
+                    Log.d(tag, "Reconnecting to ${it.address} ...")
+                    _connectionState.value = ConnectionState.CONNECTING
+                    this@GattClient.gatt = it.connectGatt(context, false, this, BluetoothDevice.TRANSPORT_LE)
+                }
             }
         }
 
@@ -53,6 +88,7 @@ class GattClient(
             val svc = gatt.getService(serviceUuid)
             if (svc == null) {
                 Log.e(tag, "Service not found: $serviceUuid")
+                disconnect()
                 return
             }
 
@@ -61,6 +97,7 @@ class GattClient(
 
             if (notifyChar == null || writeChar == null) {
                 Log.e(tag, "Characteristics not found notify=$notifyChar write=$writeChar")
+                disconnect()
                 return
             }
 

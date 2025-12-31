@@ -15,8 +15,11 @@ import androidx.compose.ui.unit.dp
 import dev.roottap.mobile.core.permissions.bleRuntimePermissions
 import dev.roottap.mobile.data.ble.BleScanner
 import dev.roottap.mobile.data.ble.DiscoveredDevice
+import dev.roottap.mobile.data.ble.GattClient
+import dev.roottap.mobile.data.ble.bluetoothDeviceFromAddress
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.CancellationException
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
@@ -36,10 +39,23 @@ private fun ScanScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scanner = remember { BleScanner(context) }
 
+    val gattClient = remember {
+        GattClient(
+            context = context,
+            serviceUuid = UUID.fromString("d173119b-a021-2f9e-6a4b-778c6f2e1c5a"),
+            notifyCharUuid = UUID.fromString("d373119b-a021-2f9e-6a4b-778c6f2e1c5a"),
+            writeCharUuid = UUID.fromString("d273119b-a021-2f9e-6a4b-778c6f2e1c5a"),
+        )
+    }
+
+
     var hasPerms by remember { mutableStateOf(false) }
     val devices = remember { mutableStateMapOf<String, DiscoveredDevice>() }
     var scanning by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var connected by remember { mutableStateOf(false) }
+
+    val TARGET_NAME = "roottap-up"
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -52,13 +68,25 @@ private fun ScanScreen() {
     }
 
     LaunchedEffect(scanning, hasPerms) {
-        if (!scanning || !hasPerms) return@LaunchedEffect
+        if (!scanning || !hasPerms || connected) return@LaunchedEffect
         error = null
         devices.clear()
 
         runCatching {
             scanner.scan(serviceUuid = null).collectLatest { d ->
                 devices[d.address] = d
+
+                if (!connected && d.name?.equals(TARGET_NAME) == true) {
+                    connected = true    // prevent repeated connects
+                    scanning = false    // stop scan UI state (will cancel scan coroutine)
+                    val device = bluetoothDeviceFromAddress(d.address)
+                    if (device != null) {
+                        gattClient.connect(device)
+                    } else {
+                        error = "Failed to resolve BluetoothDevice"
+                        connected = false
+                    }
+                }
             }
         }.onFailure {
             if (it is CancellationException) return@onFailure   // <-- IMPORTANT: ignore normal cancellation

@@ -5,12 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -114,64 +116,70 @@ private fun ScanScreen() {
         devices.clear()
     }
 
-    Column(
-        Modifier
+    Box(
+        modifier = Modifier
             .fillMaxSize()
-            .systemBarsPadding()
-            .padding(16.dp)
+            .background(Color.DarkGray)
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (!connected) {
-                Button(
-                    onClick = {
-                        scanning = !scanning
-                        if (!scanning) {
-                            error = null
-                            devices.clear()
-                        }
-                    },
-                    enabled = hasPerms
-                ) { Text(if (scanning) "Stop scan" else "Start scan") }
-            } else {
-                Button(onClick = { disconnect() }) {
-                    Text("Disconnect")
-                }
-            }
-
-            if (!hasPerms) {
-                OutlinedButton(onClick = { launcher.launch(bleRuntimePermissions()) }) {
-                    Text("Grant permissions")
-                }
-            }
-        }
-
-        if (error != null) {
-            Spacer(Modifier.height(12.dp))
-            Text("Error: $error", color = MaterialTheme.colorScheme.error)
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        if (connected) {
-            Text(
-                buildAnnotatedString {
-                    append("Connected to ")
-                    withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append(TARGET_NAME)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(16.dp)
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (!connected) {
+                    Button(
+                        onClick = {
+                            scanning = !scanning
+                            if (!scanning) {
+                                error = null
+                                devices.clear()
+                            }
+                        },
+                        enabled = hasPerms
+                    ) { Text(if (scanning) "Stop scan" else "Start scan") }
+                } else {
+                    Button(onClick = { disconnect() }) {
+                        Text("Disconnect")
                     }
                 }
-            )
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(devices.values.sortedByDescending { it.rssi }) { d ->
-                    Card(
-                        onClick = { connect(d) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(d.name ?: "(no name)")
-                            Text(d.address, style = MaterialTheme.typography.bodySmall)
-                            Text("RSSI: ${d.rssi}", style = MaterialTheme.typography.bodySmall)
+
+                if (!hasPerms) {
+                    OutlinedButton(onClick = { launcher.launch(bleRuntimePermissions()) }) {
+                        Text("Grant permissions")
+                    }
+                }
+            }
+
+            if (error != null) {
+                Spacer(Modifier.height(12.dp))
+                Text("Error: $error", color = MaterialTheme.colorScheme.error)
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            if (connected) {
+                Text(
+                    buildAnnotatedString {
+                        append("Connected to ")
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append(TARGET_NAME)
+                        }
+                    }
+                )
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(devices.values.sortedByDescending { it.rssi }) { d ->
+                        Card(
+                            onClick = { connect(d) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(d.name ?: "(no name)")
+                                Text(d.address, style = MaterialTheme.typography.bodySmall)
+                                Text("RSSI: ${d.rssi}", style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                 }

@@ -55,7 +55,12 @@ void app_main(void)
             if (ev.type == EV_REQUEST && !pending) {
                 pending = true;
                 ESP_LOGI(TAG, "Request -> notify phone");
-                button_ble_request_approval();   // 🔔 notify phone
+                esp_err_t err = button_ble_request_approval();   // 🔔 notify phone
+                if (err != ESP_OK) {
+                    pending = false;  // <-- critical: don’t get stuck
+                    ESP_LOGI(TAG, "Request canceled: %s", esp_err_to_name(err));
+                    // optional: blink LED / buzz to show “no phone”
+                }
             }
 
             if (ev.type == EV_APPROVE && pending) {

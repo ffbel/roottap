@@ -51,8 +51,10 @@ static struct ble_npl_event g_notify_ev;
 static volatile bool g_notify_pending;
 
 esp_err_t button_ble_request_approval(void) {
-    if (g_request_handle == 0) return ESP_ERR_INVALID_STATE;
-    if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
+    if (g_request_handle == 0 || g_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        ESP_LOGI(TAG, "EV_REQUEST dropped: BLE not connected or handles not ready");
+        return ESP_ERR_INVALID_STATE;
+    } 
 
     // Defer the actual notify to the NimBLE host task to avoid cross-task locking.
     g_notify_pending = true;

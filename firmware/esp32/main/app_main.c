@@ -47,15 +47,26 @@ void app_main(void)
     QueueHandle_t q = button_get_event_queue();
     button_event_t ev;
 
+    const TickType_t pending_timeout_ticks = pdMS_TO_TICKS(20000);  // timeout for awaiting approval
     bool pending = false;
+    TickType_t pending_since = 0;
 
     while (1) {
-        if (xQueueReceive(q, &ev, portMAX_DELAY)) {
+        TickType_t wait_ticks = portMAX_DELAY;
+        if (pending) {
+            TickType_t elapsed = xTaskGetTickCount() - pending_since;
+            wait_ticks = (elapsed < pending_timeout_ticks)
+                             ? (pending_timeout_ticks - elapsed)
+                             : 0;
+        }
+
+        if (xQueueReceive(q, &ev, wait_ticks)) {
 
             if (ev.type == EV_REQUEST && !pending) {
                 pending = true;
+                pending_since = xTaskGetTickCount();
                 ESP_LOGI(TAG, "Request -> notify phone");
-                esp_err_t err = button_ble_request_approval();   // 🔔 notify phone
+                esp_err_t err = button_ble_request_approval();   // notify phone
                 if (err != ESP_OK) {
                     pending = false;  // <-- critical: don’t get stuck
                     ESP_LOGI(TAG, "Request canceled: %s", esp_err_to_name(err));
@@ -65,7 +76,7 @@ void app_main(void)
 
             if (ev.type == EV_APPROVE && pending) {
                 pending = false;
-                led_toggle(&led);                // ✅ toggle ONLY here
+                led_toggle(&led);                // toggle ONLY here
             }
 
             if (ev.type == EV_DENY && pending) {
@@ -73,6 +84,9 @@ void app_main(void)
                 ESP_LOGI(TAG, "Request -> denied");
                 // optional: indicate deny
             }
+        } else if (pending) {
+            pending = false;
+            ESP_LOGI(TAG, "Request -> timeout, no response");
         }
     }
 }

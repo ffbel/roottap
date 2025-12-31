@@ -26,16 +26,6 @@
 #include "esp_log.h"
 #include <stdlib.h>
 
-static void heap_sanity(const char *where) {
-    if (!heap_caps_check_integrity_all(true)) {
-        ESP_LOGE("HEAP", "Heap corruption at: %s", where);
-        abort();
-    }
-}
-
-
-
-
 
 // NimBLE's store config init lacks a public prototype in the exported headers.
 void ble_store_config_init(void);
@@ -95,7 +85,6 @@ static void notify_evt_cb(struct ble_npl_event *ev)
 static int confirm_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
-        ESP_LOGI(TAG, "hello");
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
         ESP_LOGI(TAG, "!= BLE_GATT_ACCESS_OP_WRITE_CHR");
         return BLE_ATT_ERR_UNLIKELY;
@@ -272,14 +261,12 @@ esp_err_t button_ble_init(void)
 
     // Init NimBLE
     nimble_port_init();
-    heap_sanity("after nimble_port_init");
     ble_npl_event_init(&g_notify_ev, notify_evt_cb, NULL);
 
     // GAP/GATT services
     ble_svc_gap_init();
     ble_svc_gatt_init();
     ble_store_config_init();
-    heap_sanity("after gap/gatt/store init");
 
 
     // Set device name
@@ -287,7 +274,6 @@ esp_err_t button_ble_init(void)
 
     // Add our service
     int rc = ble_gatts_count_cfg(gatt_svcs);
-    heap_sanity("after count_cfg");
 
     // ESP_LOGE(TAG, "count_cfg rc=%d", rc);
     if (rc != 0) return ESP_FAIL;
@@ -296,7 +282,6 @@ esp_err_t button_ble_init(void)
     // ESP_LOGI(TAG, "up_chrs[1].access_cb=%p", gatt_chars[1].access_cb);
 
     rc = ble_gatts_add_svcs(gatt_svcs);
-    heap_sanity("after add_svcs");
     // ESP_LOGE(TAG, "add_svcs rc=%d", rc);
     // ESP_LOGI(TAG, "request_handle=%u", g_request_handle);
     if (rc != 0) return ESP_FAIL;

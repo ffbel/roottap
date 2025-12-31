@@ -11,6 +11,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import dev.roottap.mobile.core.permissions.bleRuntimePermissions
@@ -18,8 +23,9 @@ import dev.roottap.mobile.data.ble.BleScanner
 import dev.roottap.mobile.data.ble.DiscoveredDevice
 import dev.roottap.mobile.data.ble.GattClient
 import dev.roottap.mobile.data.ble.bluetoothDeviceFromAddress
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -36,9 +42,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ScanScreen() {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val scanner = remember { BleScanner(context) }
 
     val gattClient = remember {
@@ -76,18 +84,8 @@ private fun ScanScreen() {
 
         runCatching {
             scanner.scan(serviceUuid = null).collectLatest { d ->
-                devices[d.address] = d
-
-                if (!connected && d.name?.equals(TARGET_NAME) == true) {
-                    connected = true    // prevent repeated connects
-                    scanning = false    // stop scan UI state (will cancel scan coroutine)
-                    val device = bluetoothDeviceFromAddress(d.address)
-                    if (device != null) {
-                        gattClient.connect(device)
-                    } else {
-                        error = "Failed to resolve BluetoothDevice"
-                        connected = false
-                    }
+                if (d.name?.equals(TARGET_NAME) == true) {
+                    devices[d.address] = d
                 }
             }
         }.onFailure {
@@ -97,6 +95,25 @@ private fun ScanScreen() {
         }
     }
 
+    fun connect(device: DiscoveredDevice) {
+        scope.launch {
+            val btDevice = bluetoothDeviceFromAddress(device.address)
+            if (btDevice != null) {
+                gattClient.connect(btDevice)
+                connected = true
+                scanning = false
+            } else {
+                error = "Failed to resolve BluetoothDevice"
+            }
+        }
+    }
+
+    fun disconnect() {
+        gattClient.disconnect()
+        connected = false
+        devices.clear()
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -104,13 +121,22 @@ private fun ScanScreen() {
             .padding(16.dp)
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = {
-                    scanning = !scanning
-                    if (!scanning) error = null
-                          },
-                enabled = hasPerms
-            ) { Text(if (scanning) "Stop scan" else "Start scan") }
+            if (!connected) {
+                Button(
+                    onClick = {
+                        scanning = !scanning
+                        if (!scanning) {
+                            error = null
+                            devices.clear()
+                        }
+                    },
+                    enabled = hasPerms
+                ) { Text(if (scanning) "Stop scan" else "Start scan") }
+            } else {
+                Button(onClick = { disconnect() }) {
+                    Text("Disconnect")
+                }
+            }
 
             if (!hasPerms) {
                 OutlinedButton(onClick = { launcher.launch(bleRuntimePermissions()) }) {
@@ -126,13 +152,27 @@ private fun ScanScreen() {
 
         Spacer(Modifier.height(12.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(devices.values.sortedByDescending { it.rssi }) { d ->
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(d.name ?: "(no name)")
-                        Text(d.address, style = MaterialTheme.typography.bodySmall)
-                        Text("RSSI: ${d.rssi}", style = MaterialTheme.typography.bodySmall)
+        if (connected) {
+            Text(
+                buildAnnotatedString {
+                    append("Connected to ")
+                    withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(TARGET_NAME)
+                    }
+                }
+            )
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(devices.values.sortedByDescending { it.rssi }) { d ->
+                    Card(
+                        onClick = { connect(d) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(d.name ?: "(no name)")
+                            Text(d.address, style = MaterialTheme.typography.bodySmall)
+                            Text("RSSI: ${d.rssi}", style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }

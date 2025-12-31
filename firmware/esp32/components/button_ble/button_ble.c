@@ -15,7 +15,6 @@
 #include "host/ble_store.h"
 #include "store/config/ble_store_config.h"
 
-#include "host/ble_att.h"
 #include "os/os_mbuf.h"
 #include "host/ble_gatt.h"
 #include "host/ble_hs_mbuf.h" 
@@ -60,37 +59,6 @@ static uint8_t g_last_request_value = 0;  // 0/1 just for reads
 static QueueHandle_t s_evt_q;
 static struct ble_npl_event g_notify_ev;
 static volatile bool g_notify_pending;
-
-/* Introspect NimBLE ATT list to find bad UUID pointers causing ble_uuid_cmp crash. */
-#ifndef BLE_ATT_SVR_ACCESS_FN_DEFINED
-#define BLE_ATT_SVR_ACCESS_FN_DEFINED
-typedef int ble_att_svr_access_fn(uint16_t conn_handle, uint16_t attr_handle,
-                                  uint8_t op, uint16_t offset,
-                                  struct os_mbuf **om, void *arg);
-#endif
-
-struct ble_att_svr_entry {
-    struct ble_att_svr_entry *ha_next;
-    const ble_uuid_t *ha_uuid;
-    uint8_t ha_flags;
-    uint8_t ha_min_key_size;
-    uint16_t ha_handle_id;
-    ble_att_svr_access_fn *ha_cb;
-    void *ha_cb_arg;
-};
-
-extern struct ble_att_svr_entry *ble_att_svr_find_by_uuid(struct ble_att_svr_entry *prev,
-                                                          const ble_uuid_t *uuid,
-                                                          uint16_t end_handle);
-
-static void dump_att_table(void)
-{
-    struct ble_att_svr_entry *ha = NULL;
-    while ((ha = ble_att_svr_find_by_uuid(ha, NULL, 0xffff)) != NULL) {
-        ESP_LOGI(TAG, "ATT entry handle=%u uuid_ptr=%p flags=0x%x cb=%p",
-                 ha->ha_handle_id, ha->ha_uuid, ha->ha_flags, ha->ha_cb);
-    }
-}
 
 esp_err_t button_ble_request_approval(void) {
     if (g_request_handle == 0) return ESP_ERR_INVALID_STATE;
@@ -284,7 +252,6 @@ static void ble_app_advertise(void)
 
 static void ble_on_sync(void)
 {
-    dump_att_table();
     ESP_LOGI(TAG, "request_handle=%u, confirm_handle=%u", g_request_handle, g_confirm_handle);
 
     // Ensure we have an address
@@ -304,9 +271,6 @@ esp_err_t button_ble_init(void)
     if (!s_evt_q) return ESP_ERR_NO_MEM;
 
     // Init NimBLE
-    // ESP_ERROR_CHECK(esp_nimble_hci_and_controller_init());
-
-
     nimble_port_init();
     heap_sanity("after nimble_port_init");
     ble_npl_event_init(&g_notify_ev, notify_evt_cb, NULL);

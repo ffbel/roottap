@@ -182,12 +182,8 @@ static void ble_app_advertise(void)
 
 static void ble_on_sync(void)
 {
-    int rc = ble_gatts_start();
-    if (rc != 0) {
-        ESP_LOGE(TAG, "ble_gatts_start rc=%d", rc);
-        return;
-    }
-    ESP_LOGI(TAG, "request_handle=%u", g_request_handle);
+    dump_att_table();
+    ESP_LOGI(TAG, "request_handle=%u, confirm_handle=%u", g_request_handle, g_confirm_handle);
 
     // Ensure we have an address
     ble_app_advertise();

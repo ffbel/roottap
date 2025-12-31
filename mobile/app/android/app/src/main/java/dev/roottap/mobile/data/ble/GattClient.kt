@@ -34,61 +34,78 @@ class GattClient(
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
+        if (_connectionState.value != ConnectionState.DISCONNECTED) {
+            Log.w(tag, "Connect called while not in DISCONNECTED state.")
+            return
+        }
         this.device = device
         Log.d(tag, "Connecting to ${device.address} ...")
         _connectionState.value = ConnectionState.CONNECTING
-        gatt = device.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
+        this.gatt = device.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        Log.d(tag, "Disconnecting from ${device?.address}")
-        // No auto-reconnect if user calls this
+        Log.d(tag, "User-initiated disconnect.")
+        // 1. Prevent auto-reconnect by clearing the target device.
         device = null
-        if (gatt != null) {
-            gatt?.disconnect()
-            close()
-        } else {
-            _connectionState.value = ConnectionState.DISCONNECTED
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun close() {
-        gatt?.close()
-        gatt = null
+        // 2. Trigger GATT disconnection if a GATT object exists.
+        //    The callback will handle cleanup and final state change.
+        gatt?.disconnect()
+        // 3. Update UI immediately for responsiveness.
         _connectionState.value = ConnectionState.DISCONNECTED
     }
-
 
     private val cb: BluetoothGattCallback = object : BluetoothGattCallback() {
 
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            Log.d(tag, "conn state status=$status newState=$newState")
+            val gattDeviceAddress = gatt.device.address
+
+            // An event from a device we don't want to be connected to anymore.
+            if (device == null || gattDeviceAddress != device!!.address) {
+                // This can happen if user calls disconnect() then the callback arrives.
+                Log.d(tag, "Ignoring stale callback from $gattDeviceAddress.")
+                gatt.close()
+                return
+            }
+
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.d(tag, "Connected, discovering services...")
+                Log.d(tag, "Connected to $gattDeviceAddress, discovering services...")
                 _connectionState.value = ConnectionState.CONNECTED
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.d(tag, "Disconnected")
-                close()
-                // if device is not null, it means we want to reconnect
+                Log.d(tag, "Disconnected from $gattDeviceAddress")
+                // Always close the gatt object that has disconnected to release resources.
+                gatt.close()
+                this@GattClient.gatt = null
+
+                // Decide what to do next based on whether user wants to be connected.
                 device?.let {
+                    // This was an unexpected disconnect.
                     Log.d(tag, "Reconnecting to ${it.address} ...")
                     _connectionState.value = ConnectionState.CONNECTING
                     this@GattClient.gatt = it.connectGatt(context, false, this, BluetoothDevice.TRANSPORT_LE)
+                } ?: run {
+                    // This was an expected disconnect (user called disconnect()).
+                    _connectionState.value = ConnectionState.DISCONNECTED
                 }
             }
         }
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            Log.d(tag, "services discovered status=$status")
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Log.e(tag, "Service discovery failed with status $status")
+                gatt.disconnect()
+                return
+            }
+
+            Log.d(tag, "services discovered")
             val svc = gatt.getService(serviceUuid)
             if (svc == null) {
                 Log.e(tag, "Service not found: $serviceUuid")
-                disconnect()
+                gatt.disconnect()
                 return
             }
 
@@ -97,7 +114,7 @@ class GattClient(
 
             if (notifyChar == null || writeChar == null) {
                 Log.e(tag, "Characteristics not found notify=$notifyChar write=$writeChar")
-                disconnect()
+                gatt.disconnect()
                 return
             }
 

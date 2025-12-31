@@ -31,7 +31,7 @@ static void init_nvs(void)
 void app_main(void)
 {
     // IMPORTANT: don’t require BOOT during startup (GPIO0 is a strapping pin)
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(1500));
     init_nvs();
 
     button_init();

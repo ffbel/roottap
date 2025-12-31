@@ -8,15 +8,38 @@
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+// #include "esp_nimble_hci.h"
 #include "host/ble_hs.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "host/ble_store.h"
+#include "store/config/ble_store_config.h"
 
+#include "host/ble_att.h"
 #include "os/os_mbuf.h"
 #include "host/ble_gatt.h"
 #include "host/ble_hs_mbuf.h" 
+#include "host/ble_uuid.h"
 
 #include "button.h"
+
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include <stdlib.h>
+
+static void heap_sanity(const char *where) {
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE("HEAP", "Heap corruption at: %s", where);
+        abort();
+    }
+}
+
+
+
+
+
+// NimBLE's store config init lacks a public prototype in the exported headers.
+void ble_store_config_init(void);
 
 static const char *TAG = "button_ble";
 
@@ -35,27 +58,78 @@ static uint16_t g_request_handle = 0;
 static uint16_t g_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint8_t g_last_request_value = 0;  // 0/1 just for reads
 static QueueHandle_t s_evt_q;
+static struct ble_npl_event g_notify_ev;
+static volatile bool g_notify_pending;
+
+/* Introspect NimBLE ATT list to find bad UUID pointers causing ble_uuid_cmp crash. */
+#ifndef BLE_ATT_SVR_ACCESS_FN_DEFINED
+#define BLE_ATT_SVR_ACCESS_FN_DEFINED
+typedef int ble_att_svr_access_fn(uint16_t conn_handle, uint16_t attr_handle,
+                                  uint8_t op, uint16_t offset,
+                                  struct os_mbuf **om, void *arg);
+#endif
+
+struct ble_att_svr_entry {
+    struct ble_att_svr_entry *ha_next;
+    const ble_uuid_t *ha_uuid;
+    uint8_t ha_flags;
+    uint8_t ha_min_key_size;
+    uint16_t ha_handle_id;
+    ble_att_svr_access_fn *ha_cb;
+    void *ha_cb_arg;
+};
+
+extern struct ble_att_svr_entry *ble_att_svr_find_by_uuid(struct ble_att_svr_entry *prev,
+                                                          const ble_uuid_t *uuid,
+                                                          uint16_t end_handle);
+
+static void dump_att_table(void)
+{
+    struct ble_att_svr_entry *ha = NULL;
+    while ((ha = ble_att_svr_find_by_uuid(ha, NULL, 0xffff)) != NULL) {
+        ESP_LOGI(TAG, "ATT entry handle=%u uuid_ptr=%p flags=0x%x cb=%p",
+                 ha->ha_handle_id, ha->ha_uuid, ha->ha_flags, ha->ha_cb);
+    }
+}
 
 esp_err_t button_ble_request_approval(void) {
     if (g_request_handle == 0) return ESP_ERR_INVALID_STATE;
     if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return ESP_ERR_INVALID_STATE;
 
-    uint8_t v = 1; // payload doesn't matter for now
-
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(&v, sizeof(v));
-    if (!om) return ESP_ERR_NO_MEM;
-
-    int rc = ble_gatts_notify_custom(g_conn_handle, g_request_handle, om);
-
-    return rc == 0 ? ESP_OK : ESP_FAIL;
+    // Defer the actual notify to the NimBLE host task to avoid cross-task locking.
+    g_notify_pending = true;
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &g_notify_ev);
+    return ESP_OK;
 }
 
+static void notify_evt_cb(struct ble_npl_event *ev)
+{
+    if (g_request_handle == 0) return;
+    if (g_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
+    if (!g_notify_pending) return;
+    g_notify_pending = false;
+
+    uint8_t v = 1;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&v, sizeof(v));
+    if (!om) {
+        ESP_LOGE(TAG, "notify: no mbuf");
+        return;
+    }
+
+    int rc = ble_gatts_notify_custom(g_conn_handle, g_request_handle, om);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "notify failed rc=%d", rc);
+        os_mbuf_free_chain(om);
+    }
+}
 
 // ---- GATT callback: phone writes "confirm" here
 static int confirm_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                              struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
+        ESP_LOGI(TAG, "hello");
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        ESP_LOGI(TAG, "!= BLE_GATT_ACCESS_OP_WRITE_CHR");
         return BLE_ATT_ERR_UNLIKELY;
     }
 
@@ -92,27 +166,55 @@ static int request_access_cb(uint16_t conn_handle,
 }
 
 
+static void
+gatt_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg)
+{
+    char uuid_str[BLE_UUID_STR_LEN];
+
+    switch (ctxt->op) {
+    case BLE_GATT_REGISTER_OP_SVC:
+        ESP_LOGI(TAG, "reg svc: handle=%u uuid=%s",
+                 ctxt->svc.handle, ble_uuid_to_str(ctxt->svc.svc_def->uuid, uuid_str));
+        break;
+    case BLE_GATT_REGISTER_OP_CHR:
+        ESP_LOGI(TAG, "reg chr: def_handle=%u val_handle=%u uuid=%s access_cb=%p",
+                 ctxt->chr.def_handle, ctxt->chr.val_handle,
+                 ble_uuid_to_str(ctxt->chr.chr_def->uuid, uuid_str),
+                 ctxt->chr.chr_def->access_cb);
+        break;
+    case BLE_GATT_REGISTER_OP_DSC:
+        ESP_LOGI(TAG, "reg dsc: handle=%u uuid=%s access_cb=%p",
+                 ctxt->dsc.handle, ble_uuid_to_str(ctxt->dsc.dsc_def->uuid, uuid_str),
+                 ctxt->dsc.dsc_def->access_cb);
+        break;
+    default:
+        break;
+    }
+}
+
+static const struct ble_gatt_chr_def gatt_chars[] = {
+    {
+        .uuid = &UUID_CHR_REQUEST.u,
+        .access_cb = request_access_cb,
+        .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+        .val_handle = &g_request_handle,
+    },
+    {
+        .uuid = &UUID_CHR_CONFIRM.u,
+        .access_cb = confirm_access_cb,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        .val_handle = &g_confirm_handle,
+    },
+    { 0 }
+};
+
 static const struct ble_gatt_svc_def gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
         .uuid = &UUID_SVC_UP.u,
-        .characteristics = (struct ble_gatt_chr_def[]) {
-            {
-                .uuid = &UUID_CHR_REQUEST.u,
-                .access_cb = request_access_cb,
-                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-                .val_handle = &g_request_handle,
-            },
-            {
-                .uuid = &UUID_CHR_CONFIRM.u,
-                .access_cb = confirm_access_cb,
-                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
-                .val_handle = &g_confirm_handle,
-            },
-            {0}
-        },
+        .characteristics = gatt_chars,
     },
-    {0}
+    { 0 }
 };
 
 static void ble_app_advertise(void);
@@ -202,25 +304,40 @@ esp_err_t button_ble_init(void)
     if (!s_evt_q) return ESP_ERR_NO_MEM;
 
     // Init NimBLE
+    // ESP_ERROR_CHECK(esp_nimble_hci_and_controller_init());
+
+
     nimble_port_init();
+    heap_sanity("after nimble_port_init");
+    ble_npl_event_init(&g_notify_ev, notify_evt_cb, NULL);
 
     // GAP/GATT services
     ble_svc_gap_init();
     ble_svc_gatt_init();
+    ble_store_config_init();
+    heap_sanity("after gap/gatt/store init");
+
 
     // Set device name
     ble_svc_gap_device_name_set("roottap-up");
 
     // Add our service
     int rc = ble_gatts_count_cfg(gatt_svcs);
-    ESP_LOGE(TAG, "count_cfg rc=%d", rc);
+    heap_sanity("after count_cfg");
+
+    // ESP_LOGE(TAG, "count_cfg rc=%d", rc);
     if (rc != 0) return ESP_FAIL;
 
+    // ESP_LOGI(TAG, "confirm_access_cb=%p", confirm_access_cb);
+    // ESP_LOGI(TAG, "up_chrs[1].access_cb=%p", gatt_chars[1].access_cb);
+
     rc = ble_gatts_add_svcs(gatt_svcs);
-    ESP_LOGE(TAG, "add_svcs rc=%d", rc);
+    heap_sanity("after add_svcs");
+    // ESP_LOGE(TAG, "add_svcs rc=%d", rc);
     // ESP_LOGI(TAG, "request_handle=%u", g_request_handle);
     if (rc != 0) return ESP_FAIL;
 
+    ble_hs_cfg.gatts_register_cb = gatt_register_cb;
     ble_hs_cfg.sync_cb = ble_on_sync;
 
     // Start host

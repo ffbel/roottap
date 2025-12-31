@@ -113,12 +113,11 @@ class GattClient(
         c.value = payload
 
         // Prefer WRITE_NO_RESPONSE if your char supports it (faster).
-        c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-//        val supportsNoResp = (c.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
-//        c.writeType = if (supportsNoResp)
-//            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-//        else
-//            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        val supportsNoResp = (c.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
+        c.writeType = if (supportsNoResp)
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        else
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
 
         val ok = g.writeCharacteristic(c)
         Log.d(tag, "writeCharacteristic ok=$ok payload=${payload.joinToString { "%02X".format(it) }}")

@@ -120,3 +120,35 @@ reports/
 firmware/**/*.signed
 firmware/**/*.encrypted
 firmware/**/*.ota
+
+# === Rust / Cargo ===
+**/target/
+**/*.rs.bk
+Cargo.lock
+
+# Cargo build artifacts
+*.rlib
+*.rmeta
+*.a
+*.so
+*.dylib
+*.dll
+
+# === Rust analyzer / IDE ===
+.rustc_info.json
+/.cargo/config.toml
+
+# === Build scripts ===
+build.rs.bk
+
+# === Temporary files ===
+*.tmp
+*.log
+
+# === Editor junk ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

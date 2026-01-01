@@ -1,0 +1,15 @@
+[package]
+name = "rust"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "core"
+crate-type = ["staticlib"]
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[dependencies]

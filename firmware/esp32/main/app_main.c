@@ -8,6 +8,8 @@
 #include "led.h"
 #include "esp_log.h"
 
+#include "core_api.h"
+
 static const char *TAG = "main";
 
 #define LED_GPIO GPIO_NUM_21   // adjust if LED uses a different pin
@@ -50,6 +52,9 @@ void app_main(void)
     const TickType_t pending_timeout_ticks = pdMS_TO_TICKS(20000);  // timeout for awaiting approval
     bool pending = false;
     TickType_t pending_since = 0;
+
+    const char *msg = rust_hello();
+    ESP_LOGI(TAG, "%s", msg);
 
     while (1) {
         TickType_t wait_ticks = portMAX_DELAY;

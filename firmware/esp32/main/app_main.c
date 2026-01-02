@@ -53,8 +53,6 @@ void app_main(void)
     bool pending = false;
     TickType_t pending_since = 0;
 
-    const char *msg = rust_hello();
-    ESP_LOGI(TAG, "%s", msg);
 
     while (1) {
         TickType_t wait_ticks = portMAX_DELAY;

@@ -1,9 +1,5 @@
 #![no_std]
 
+pub mod core_api;
+pub mod ctap2;
 mod ffi;
-use core::panic::PanicInfo;
-
-#[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
-    loop {}
-}

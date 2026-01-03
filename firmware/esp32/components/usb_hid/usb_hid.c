@@ -6,6 +6,8 @@
 #include "tinyusb.h"
 #include "tusb.h"
 #include "class/hid/hid_device.h"
+#include "tusb_cdc_acm.h"
+#include "tusb_console.h"
 
 static const char *TAG = "usb_hid";
 
@@ -29,25 +31,26 @@ static const uint8_t s_hid_report_desc[] = {
     0xC0                      // End Collection
 };
 
-enum {
-    ITF_NUM_HID = 0,
-    ITF_NUM_TOTAL
-};
-
-#define EPNUM_HID_OUT 0x01
-#define EPNUM_HID_IN  0x81
+enum { ITF_CDC_0 = 0, ITF_CDC_0_DATA, ITF_HID, ITF_TOTAL };
+#define EPNUM_CDC_0_NOTIF 0x81
+#define EPNUM_CDC_0_OUT   0x02
+#define EPNUM_CDC_0_IN    0x82
+#define EPNUM_HID_OUT     0x03
+#define EPNUM_HID_IN      0x83
 #define HID_POLL_INTERVAL_MS 1
 
 static const uint8_t s_configuration_descriptor[] = {
-    // Configuration descriptor + single HID interface (IN/OUT, 64-byte EPs).
-    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0,
-                          TUD_CONFIG_DESC_LEN + TUD_HID_INOUT_DESC_LEN,
-                          TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
-    TUD_HID_INOUT_DESCRIPTOR(ITF_NUM_HID, 0, HID_ITF_PROTOCOL_NONE,
+    TUD_CONFIG_DESCRIPTOR(1, ITF_TOTAL, 0,
+        TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN,
+        TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    TUD_CDC_DESCRIPTOR(ITF_CDC_0, 0, EPNUM_CDC_0_NOTIF, 8,
+                       EPNUM_CDC_0_OUT, EPNUM_CDC_0_IN, 64),
+    TUD_HID_INOUT_DESCRIPTOR(ITF_HID, 0, HID_ITF_PROTOCOL_NONE,
                              sizeof(s_hid_report_desc),
                              EPNUM_HID_OUT, EPNUM_HID_IN,
                              USB_HID_REPORT_LEN, HID_POLL_INTERVAL_MS),
 };
+
 
 // TinyUSB calls this to get the report descriptor for interface itf.
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf)
@@ -108,6 +111,20 @@ int usb_hid_init(usb_hid_out_cb_t cb, void *user)
     }
 
     ESP_LOGI(TAG, "USB HID initialized (FIDO report len=%d)", USB_HID_REPORT_LEN);
+
+    const tinyusb_config_cdcacm_t cdc_cfg = {
+        .usb_dev = TINYUSB_USBDEV_0,
+        .cdc_port = TINYUSB_CDC_ACM_0,
+        .rx_unread_buf_sz = 256,
+        .callback_rx = NULL,
+        .callback_rx_wanted_char = NULL,
+        .callback_line_state_changed = NULL,
+        .callback_line_coding_changed = NULL,
+    };
+
+    ESP_ERROR_CHECK(tusb_cdc_acm_init(&cdc_cfg));
+    ESP_ERROR_CHECK(esp_tusb_init_console(TINYUSB_CDC_ACM_0));  // routes stdin/stdout/ESP_LOG to CDC
+
     return 0;
 }
 

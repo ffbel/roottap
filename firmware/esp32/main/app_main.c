@@ -11,7 +11,7 @@
 #include "core_api.h"
 #include "usb_hid.h"
 #include "ctaphid.h"
-#include "usb_cdc_cmd.h"
+// #include "usb_cdc_cmd.h"
 
 static const char *TAG = "main";
 
@@ -57,13 +57,21 @@ void app_main(void)
     };
     ctaphid_init(&s_ctap, &io);
 
-    ESP_ERROR_CHECK(usb_hid_init(on_usb_out, NULL));
-    usb_cdc_cmd_start();
+                ESP_LOGI(TAG, "before hid");
+    // ESP_ERROR_CHECK(usb_hid_init(on_usb_out, NULL));
+    int rc = usb_hid_init(on_usb_out, NULL);
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    ESP_LOGI(TAG, "usb_hid_init rc=%d", rc);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "usb_hid_init failed");
+        return;
+    }
+    // usb_cdc_cmd_start();
 
 
 
-    // button_init();
-    // ESP_ERROR_CHECK(button_gpio_init());
+    button_init();
+    ESP_ERROR_CHECK(button_gpio_init());
 
 
     // led_t led;

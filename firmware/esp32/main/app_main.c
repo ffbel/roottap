@@ -11,6 +11,7 @@
 #include "core_api.h"
 #include "usb_hid.h"
 #include "ctaphid.h"
+#include "usb_cdc_cmd.h"
 
 static const char *TAG = "main";
 
@@ -57,6 +58,8 @@ void app_main(void)
     ctaphid_init(&s_ctap, &io);
 
     ESP_ERROR_CHECK(usb_hid_init(on_usb_out, NULL));
+    usb_cdc_cmd_start();
+
 
 
     // button_init();

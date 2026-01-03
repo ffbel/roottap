@@ -23,6 +23,7 @@ git submodule update --init --recursive
 echo "Installing ESP-IDF tools for esp32s3..."
 ./install.sh esp32s3
 echo "source $IDF_PATH/export.sh > /dev/null" >> ${HOME}/.zshrc
+. $IDF_PATH/export.sh && idf.py add-dependency "espressif/esp_tinyusb^1.5.0"
 
 
 echo 

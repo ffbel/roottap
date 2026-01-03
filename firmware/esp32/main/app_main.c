@@ -9,6 +9,8 @@
 #include "esp_log.h"
 
 #include "core_api.h"
+#include "usb_hid.h"
+#include "ctaphid.h"
 
 static const char *TAG = "main";
 
@@ -28,6 +30,18 @@ static void init_nvs(void)
     }
 }
 
+static ctaphid_ctx_t s_ctap;
+
+static int send_report(void *user, const uint8_t *r64) {
+    (void)user;
+    return usb_hid_send_report(r64, USB_HID_REPORT_LEN);
+}
+
+static void on_usb_out(void *user, const uint8_t *report, size_t len) {
+    (void)user;
+    ctaphid_on_report(&s_ctap, report, len);
+}
+
 
 
 void app_main(void)
@@ -36,60 +50,69 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(1500));
     init_nvs();
 
-    button_init();
-    ESP_ERROR_CHECK(button_gpio_init());
+    ctaphid_io_t io = {
+        .send_report = send_report,
+        .send_user = NULL,
+    };
+    ctaphid_init(&s_ctap, &io);
+
+    ESP_ERROR_CHECK(usb_hid_init(on_usb_out, NULL));
 
 
-    led_t led;
-    led_init(&led, LED_GPIO, true);
-
-    vTaskDelay(pdMS_TO_TICKS(500));
-    ESP_ERROR_CHECK(button_ble_init());
-
-    QueueHandle_t q = button_get_event_queue();
-    button_event_t ev;
-
-    const TickType_t pending_timeout_ticks = pdMS_TO_TICKS(20000);  // timeout for awaiting approval
-    bool pending = false;
-    TickType_t pending_since = 0;
+    // button_init();
+    // ESP_ERROR_CHECK(button_gpio_init());
 
 
-    while (1) {
-        TickType_t wait_ticks = portMAX_DELAY;
-        if (pending) {
-            TickType_t elapsed = xTaskGetTickCount() - pending_since;
-            wait_ticks = (elapsed < pending_timeout_ticks)
-                             ? (pending_timeout_ticks - elapsed)
-                             : 0;
-        }
+    // led_t led;
+    // led_init(&led, LED_GPIO, true);
 
-        if (xQueueReceive(q, &ev, wait_ticks)) {
+    // vTaskDelay(pdMS_TO_TICKS(500));
+    // ESP_ERROR_CHECK(button_ble_init());
 
-            if (ev.type == EV_REQUEST && !pending) {
-                pending = true;
-                pending_since = xTaskGetTickCount();
-                ESP_LOGI(TAG, "Request -> notify phone");
-                esp_err_t err = button_ble_request_approval();   // notify phone
-                if (err != ESP_OK) {
-                    pending = false;  // <-- critical: don’t get stuck
-                    ESP_LOGI(TAG, "Request canceled: %s", esp_err_to_name(err));
-                    // optional: blink LED / buzz to show “no phone”
-                }
-            }
+    // QueueHandle_t q = button_get_event_queue();
+    // button_event_t ev;
 
-            if (ev.type == EV_APPROVE && pending) {
-                pending = false;
-                led_toggle(&led);                // toggle ONLY here
-            }
+    // const TickType_t pending_timeout_ticks = pdMS_TO_TICKS(20000);  // timeout for awaiting approval
+    // bool pending = false;
+    // TickType_t pending_since = 0;
 
-            if (ev.type == EV_DENY && pending) {
-                pending = false;
-                ESP_LOGI(TAG, "Request -> denied");
-                // optional: indicate deny
-            }
-        } else if (pending) {
-            pending = false;
-            ESP_LOGI(TAG, "Request -> timeout, no response");
-        }
-    }
+
+    // while (1) {
+    //     TickType_t wait_ticks = portMAX_DELAY;
+    //     if (pending) {
+    //         TickType_t elapsed = xTaskGetTickCount() - pending_since;
+    //         wait_ticks = (elapsed < pending_timeout_ticks)
+    //                          ? (pending_timeout_ticks - elapsed)
+    //                          : 0;
+    //     }
+
+    //     if (xQueueReceive(q, &ev, wait_ticks)) {
+
+    //         if (ev.type == EV_REQUEST && !pending) {
+    //             pending = true;
+    //             pending_since = xTaskGetTickCount();
+    //             ESP_LOGI(TAG, "Request -> notify phone");
+    //             esp_err_t err = button_ble_request_approval();   // notify phone
+    //             if (err != ESP_OK) {
+    //                 pending = false;  // <-- critical: don’t get stuck
+    //                 ESP_LOGI(TAG, "Request canceled: %s", esp_err_to_name(err));
+    //                 // optional: blink LED / buzz to show “no phone”
+    //             }
+    //         }
+
+    //         if (ev.type == EV_APPROVE && pending) {
+    //             pending = false;
+    //             led_toggle(&led);                // toggle ONLY here
+    //         }
+
+    //         if (ev.type == EV_DENY && pending) {
+    //             pending = false;
+    //             ESP_LOGI(TAG, "Request -> denied");
+    //             // optional: indicate deny
+    //         }
+    //     } else if (pending) {
+    //         pending = false;
+    //         ESP_LOGI(TAG, "Request -> timeout, no response");
+    //     }
+    // }
 }

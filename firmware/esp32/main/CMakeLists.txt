@@ -3,7 +3,7 @@ idf_component_register(
     INCLUDE_DIRS 
         "."
         "../core/include"
-    REQUIRES button led button_ble button_gpio nvs_flash
+    REQUIRES button led button_ble button_gpio nvs_flash ctaphid usb_hid
 )
 
 set(RUST_DIR "${CMAKE_SOURCE_DIR}/core/rust")

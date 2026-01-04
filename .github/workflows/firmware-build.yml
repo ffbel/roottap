@@ -61,6 +61,8 @@ jobs:
           name: esp32s3-build
           path: |
             firmware/esp32/build/*.bin
+            firmware/esp32/build/bootloader/bootloader.bin
+            firmware/esp32/build/partition_table/partition-table.bin
             firmware/esp32/build/*.elf
             firmware/esp32/build/flasher_args.json
           if-no-files-found: warn

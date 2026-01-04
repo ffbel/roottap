@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "ctaphid.c"
     INCLUDE_DIRS "include" "../../core/include"
-    REQUIRES log
+    REQUIRES log esp_timer esp_system
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

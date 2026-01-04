@@ -34,6 +34,7 @@ typedef struct ctaphid_ctx {
     uint16_t cur_len;
     uint16_t got;
     uint8_t  next_seq;
+    uint64_t started_at_us;
     uint8_t  buf[1024];   // MAX_MSG_SIZE in ctaphid.c
 
     // core workspace

@@ -1,5 +1,8 @@
 #include "ctaphid.h"
 #include "esp_log.h"
+#include "esp_random.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 #include <string.h>
 
 #include "core_api.h"   // your Rust FFI header
@@ -10,6 +13,7 @@ static const char *TAG = "ctaphid";
 #define INIT_PAYLOAD_MAX (CTAPHID_REPORT_LEN - 7)  // 57
 #define CONT_PAYLOAD_MAX (CTAPHID_REPORT_LEN - 5)  // 59
 #define MAX_MSG_SIZE     1024                      // tune later
+#define MSG_TIMEOUT_US   (3 * 1000 * 1000ULL)      // 3s reassembly timeout
 
 // CTAPHID error codes (payload for CTAPHID_ERROR)
 #define ERR_INVALID_CMD   0x01
@@ -57,7 +61,9 @@ static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_
 
     uint16_t n0 = len > INIT_PAYLOAD_MAX ? INIT_PAYLOAD_MAX : len;
     if (n0) memcpy(&r[7], payload, n0);
-    ctx->io.send_report(ctx->io.send_user, r);
+    int rc = ctx->io.send_report(ctx->io.send_user, r);
+    ESP_LOGI(TAG, "send_msg init cid=%08x cmd=%02x len=%u rc=%d", (unsigned)cid, cmd, (unsigned)len, rc);
+    if (rc != 0) ESP_LOGW(TAG, "send_report init rc=%d", rc);
 
     uint16_t off = n0;
     uint8_t seq = 0;
@@ -68,17 +74,32 @@ static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_
         r[4] = seq; // continuation packet uses seq in byte4
         uint16_t n = (len - off) > CONT_PAYLOAD_MAX ? CONT_PAYLOAD_MAX : (len - off);
         memcpy(&r[5], payload + off, n);
-        ctx->io.send_report(ctx->io.send_user, r);
+        rc = ctx->io.send_report(ctx->io.send_user, r);
+        ESP_LOGI(TAG, "send_msg cont cid=%08x seq=%u n=%u rc=%d", (unsigned)cid, (unsigned)seq, (unsigned)n, rc);
+        if (rc != 0) ESP_LOGW(TAG, "send_report cont rc=%d seq=%u", rc, (unsigned)seq);
         off += n;
         seq++;
     }
 }
 
+static void reset_reassembly(ctaphid_ctx_t *ctx)
+{
+    ctx->cur_cid = 0;
+    ctx->cur_cmd = 0;
+    ctx->cur_len = 0;
+    ctx->got = 0;
+    ctx->next_seq = 0;
+    ctx->started_at_us = 0;
+}
+
 static uint32_t alloc_cid(void)
 {
-    // Minimal: static incrementing CID. Replace with RNG later.
-    static uint32_t next = 0xA0A0A001u;
-    return next++;
+    uint32_t cid = 0;
+    // avoid broadcast/zero; no persistence so collisions are still possible but unlikely
+    do {
+        cid = esp_random();
+    } while (cid == 0 || cid == CTAPHID_BROADCAST_CID);
+    return cid;
 }
 
 // ---- public API ----
@@ -105,11 +126,7 @@ static void handle_complete_message(ctaphid_ctx_t *ctx)
     uint8_t cmd = ctx->cur_cmd;
 
     // reset reassembly state
-    ctx->cur_cid = 0;
-    ctx->cur_cmd = 0;
-    ctx->cur_len = 0;
-    ctx->got = 0;
-    ctx->next_seq = 0;
+    reset_reassembly(ctx);
 
     if (cmd == CTAPHID_PING) {
         send_msg(ctx, cid, CTAPHID_PING, msg, (uint16_t)msg_len);
@@ -142,8 +159,24 @@ void ctaphid_on_report(ctaphid_ctx_t *ctx, const uint8_t *report, size_t len)
 {
     if (len != CTAPHID_REPORT_LEN) return;
 
+    int64_t now_us = esp_timer_get_time();
+
     uint32_t cid = be32(report);
     uint8_t b4 = report[4];
+    ESP_LOGI(TAG, "on_report cid=%08x b4=%02x len=%u", (unsigned)cid, b4, (unsigned)len);
+
+    // timeout handling for in-flight message before processing new frame
+    if (ctx->cur_len && ctx->started_at_us) {
+        uint32_t expired_cid = ctx->cur_cid;
+        if (now_us - (int64_t)ctx->started_at_us > (int64_t)MSG_TIMEOUT_US) {
+            reset_reassembly(ctx);
+            send_error(ctx, expired_cid, ERR_MSG_TIMEOUT);
+            // drop stray continuation for timed-out transaction
+            if ((b4 & 0x80) == 0 && cid == expired_cid) {
+                return;
+            }
+        }
+    }
 
     if (b4 & 0x80) {
         // INIT frame
@@ -153,6 +186,14 @@ void ctaphid_on_report(ctaphid_ctx_t *ctx, const uint8_t *report, size_t len)
         uint16_t n = total > INIT_PAYLOAD_MAX ? INIT_PAYLOAD_MAX : total;
 
         if (total > MAX_MSG_SIZE) { send_error(ctx, cid, ERR_INVALID_LEN); return; }
+
+        if (cmd == CTAPHID_CANCEL) {
+            if (total != 0) { send_error(ctx, cid, ERR_INVALID_LEN); return; }
+            if (ctx->cur_len && cid == ctx->cur_cid) {
+                reset_reassembly(ctx);
+            }
+            return;
+        }
 
         if (cmd == CTAPHID_INIT) {
             // INIT request payload is 8-byte nonce
@@ -174,12 +215,18 @@ void ctaphid_on_report(ctaphid_ctx_t *ctx, const uint8_t *report, size_t len)
             return;
         }
 
+        if (ctx->cur_len != 0) {
+            send_error(ctx, cid, ERR_CHANNEL_BUSY);
+            return;
+        }
+
         // start reassembly for PING/CBOR/etc
         ctx->cur_cid = cid;
         ctx->cur_cmd = cmd;
         ctx->cur_len = total;
         ctx->got = 0;
         ctx->next_seq = 0;
+        ctx->started_at_us = (uint64_t)now_us;
 
         if (n) {
             memcpy(ctx->buf, p, n);

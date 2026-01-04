@@ -1,22 +1,50 @@
 use crate::core_api::CoreCtx;
-use crate::ctap2::{cbor, status::CtapStatus};
+use crate::ctap2::{cbor, constants, status::CtapStatus};
+
+const AAGUID: [u8; 16] = [
+    0x52, 0x4f, 0x4f, 0x54, 0x54, 0x41, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+];
 
 pub fn handle(_ctx: &mut CoreCtx, _cbor_req: &[u8], out: &mut [u8]) -> Result<usize, CtapStatus> {
-    // CTAP2 GetInfo response is a CBOR map with fields like:
-    // 1: versions, 2: extensions, 3: aaguid, 4: options, ...
-    //
-    // Skeleton: return {"versions": ["FIDO_2_0"]} in minimal CBOR.
-    // We'll encode a small CBOR map:
-    // { 1: ["FIDO_2_0"] }
-    //
-    // Field numbers are per CTAP2 spec; keep minimal for now.
-
     let mut w = cbor::Writer::new(out);
 
-    w.map(1)?; // map with 1 pair
-    w.u8(1)?; // key = 1 (versions)
-    w.array(1)?; // 1 element
+    w.map(5)?;
+
+    // versions
+    w.u8(1)?;
+    w.array(1)?;
     w.tstr("FIDO_2_0")?;
+
+    // aaguid
+    w.u8(3)?;
+    w.bstr(&AAGUID)?;
+
+    // options
+    w.u8(4)?;
+    w.map(5)?;
+    w.tstr("up")?;
+    w.bool(true)?;
+    w.tstr("uv")?;
+    w.bool(false)?;
+    w.tstr("rk")?;
+    w.bool(false)?;
+    w.tstr("plat")?;
+    w.bool(false)?;
+    w.tstr("clientPin")?;
+    w.bool(false)?;
+
+    // algorithms
+    w.u8(5)?;
+    w.array(1)?;
+    w.map(2)?;
+    w.tstr("type")?;
+    w.tstr("public-key")?;
+    w.tstr("alg")?;
+    w.nint(-7)?;
+
+    // maxMsgSize
+    w.u8(6)?;
+    w.u32(constants::MAX_MSG_SIZE as u32)?;
 
     Ok(w.len())
 }

@@ -1,0 +1,63 @@
+name: firmware-build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-esp32s3:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Cache cargo registry + git deps + target artifacts to speed up Rust builds
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            **/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Install Rust (needed to run espup; espup will install + configure the `esp` toolchain)
+      - name: Install Rust (bootstrap)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install espup (Espressif Rust toolchain installer)
+        run: |
+          cargo install espup
+          espup install
+          # espup generates an export script; source it for this step verification
+          . $HOME/export-esp.sh
+          rustup toolchain list
+          rustup run esp rustc -V
+          rustup run esp cargo -V
+
+      # Build the ESP-IDF project
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.2
+          target: esp32s3
+          path: firmware/esp32
+          command: |
+            # Make `cargo +esp` work inside the ESP-IDF action shell:
+            . $HOME/export-esp.sh
+            idf.py set-target esp32s3
+            idf.py build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-build
+          path: |
+            firmware/esp32/build/*.bin
+            firmware/esp32/build/*.elf
+            firmware/esp32/build/flasher_args.json
+          if-no-files-found: warn

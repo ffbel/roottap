@@ -1,4 +1,6 @@
 #include "ctaphid.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_system.h"
@@ -51,6 +53,19 @@ static void send_error(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t err)
     ctx->io.send_report(ctx->io.send_user, r);
 }
 
+// send_report wrapper that waits briefly if HID IN endpoint is busy (-2).
+static int send_report_retry(ctaphid_ctx_t *ctx, const uint8_t *r)
+{
+    int rc = 0;
+    int tries = 0;
+    do {
+        rc = ctx->io.send_report(ctx->io.send_user, r);
+        if (rc != -2) break;
+        vTaskDelay(pdMS_TO_TICKS(2));
+    } while (++tries < 20); // up to ~40ms
+    return rc;
+}
+
 static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_t *payload, uint16_t len)
 {
     uint8_t r[CTAPHID_REPORT_LEN];
@@ -61,7 +76,7 @@ static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_
 
     uint16_t n0 = len > INIT_PAYLOAD_MAX ? INIT_PAYLOAD_MAX : len;
     if (n0) memcpy(&r[7], payload, n0);
-    int rc = ctx->io.send_report(ctx->io.send_user, r);
+    int rc = send_report_retry(ctx, r);
     ESP_LOGI(TAG, "send_msg init cid=%08x cmd=%02x len=%u rc=%d", (unsigned)cid, cmd, (unsigned)len, rc);
     if (rc != 0) ESP_LOGW(TAG, "send_report init rc=%d", rc);
 
@@ -74,7 +89,7 @@ static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_
         r[4] = seq; // continuation packet uses seq in byte4
         uint16_t n = (len - off) > CONT_PAYLOAD_MAX ? CONT_PAYLOAD_MAX : (len - off);
         memcpy(&r[5], payload + off, n);
-        rc = ctx->io.send_report(ctx->io.send_user, r);
+        rc = send_report_retry(ctx, r);
         ESP_LOGI(TAG, "send_msg cont cid=%08x seq=%u n=%u rc=%d", (unsigned)cid, (unsigned)seq, (unsigned)n, rc);
         if (rc != 0) ESP_LOGW(TAG, "send_report cont rc=%d seq=%u", rc, (unsigned)seq);
         off += n;

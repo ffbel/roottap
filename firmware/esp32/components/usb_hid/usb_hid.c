@@ -2,6 +2,8 @@
 
 #include "usb_hid.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "tinyusb.h"
 #include "tusb.h"
@@ -13,6 +15,7 @@ static const char *TAG = "usb_hid";
 
 static usb_hid_out_cb_t s_out_cb = NULL;
 static void *s_out_user = NULL;
+static volatile bool s_in_busy = false; // true while an IN transfer is in flight
 
 // FIDO/U2F HID report descriptor (64-byte IN/OUT).
 static const uint8_t s_hid_report_desc[] = {
@@ -89,6 +92,15 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
     }
 }
 
+// Called when a report has completed sending (IN endpoint is free again).
+void tud_hid_report_complete_cb(uint8_t itf, uint8_t const *report, uint16_t len)
+{
+    (void)itf;
+    (void)report;
+    (void)len;
+    s_in_busy = false;
+}
+
 int usb_hid_init(usb_hid_out_cb_t cb, void *user)
 {
     s_out_cb = cb;
@@ -133,10 +145,24 @@ int usb_hid_send_report(const uint8_t *report, size_t len)
     if (len != USB_HID_REPORT_LEN) {
         return -1;
     }
-    if (!tud_hid_ready()) {
-        return -2;
+    // Wait for any in-flight IN transfer to finish.
+    for (int tries = 0; tries < 200 && s_in_busy; tries++) { // ~200ms max
+        tud_task(); // pump TinyUSB state so completions fire
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
+    if (s_in_busy) return -2;
+    s_in_busy = true;
+    for (int tries = 0; tries < 200; tries++) {
+        if (tud_hid_ready()) break;
+        tud_task();
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    if (!tud_hid_ready()) { s_in_busy = false; return -2; }
 
     const bool ok = tud_hid_report(0, report, (uint16_t)len);
-    return ok ? 0 : -3;
+    if (!ok) {
+        s_in_busy = false;
+        return -3;
+    }
+    return 0;
 }

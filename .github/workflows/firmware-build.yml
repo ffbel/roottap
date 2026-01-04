@@ -39,18 +39,17 @@ jobs:
           rustup run esp rustc -V
           rustup run esp cargo -V
 
-      # Build the ESP-IDF project
-      - name: Build with ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
+      - name: Install ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
         with:
-          esp_idf_version: v5.2
-          target: esp32s3
-          path: firmware/esp32
-          command: |
-            # Make `cargo +esp` work inside the ESP-IDF action shell:
-            . $HOME/export-esp.sh
-            idf.py set-target esp32s3
-            idf.py build
+          version: v5.2
+
+      - name: Build (ESP-IDF + Rust)
+        working-directory: firmware/esp32
+        run: |
+          . $HOME/export-esp.sh
+          idf.py set-target esp32s3
+          idf.py build
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

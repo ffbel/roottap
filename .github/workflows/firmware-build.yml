@@ -48,6 +48,10 @@ jobs:
         working-directory: firmware/esp32
         run: |
           . $HOME/export-esp.sh
+
+          # IMPORTANT: remove espup's xtensa gcc from PATH for ESP-IDF
+          export PATH="$(echo "$PATH" | tr ':' '\n' | grep -v rustup | tr '\n' ':')"
+
           idf.py set-target esp32s3
           idf.py build
 

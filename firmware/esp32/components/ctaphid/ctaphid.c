@@ -70,7 +70,7 @@ static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_
     uint16_t n0 = len > INIT_PAYLOAD_MAX ? INIT_PAYLOAD_MAX : len;
     if (n0) memcpy(&r[7], payload, n0);
     int rc = send_report_retry(ctx, r);
-    ESP_LOGI(TAG, "send_msg init cid=%08x cmd=%02x len=%u rc=%d", (unsigned)cid, cmd, (unsigned)len, rc);
+    ESP_LOGI(TAG, "send_msg init cid=%08x cmd=%02x len=%u n0=%u rc=%d", (unsigned)cid, cmd, (unsigned)len, (unsigned)n0, rc);
     if (rc != 0) ESP_LOGW(TAG, "send_report init rc=%d", rc);
 
     uint16_t off = n0;

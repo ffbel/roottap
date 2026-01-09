@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
 
 #include "tinyusb.h"
 #include "tusb.h"
@@ -16,6 +17,48 @@ static const char *TAG = "usb_hid";
 static usb_hid_out_cb_t s_out_cb = NULL;
 static void *s_out_user = NULL;
 static volatile bool s_in_busy = false; // true while an IN transfer is in flight
+#define USB_HID_TXQ_DEPTH 4
+static uint8_t s_txq[USB_HID_TXQ_DEPTH][USB_HID_REPORT_LEN];
+static uint8_t s_tx_head = 0;
+static uint8_t s_tx_tail = 0;
+static uint8_t s_tx_count = 0;
+
+static bool txq_push(const uint8_t *report)
+{
+    if (s_tx_count >= USB_HID_TXQ_DEPTH) return false;
+    memcpy(s_txq[s_tx_tail], report, USB_HID_REPORT_LEN);
+    s_tx_tail = (uint8_t)((s_tx_tail + 1) % USB_HID_TXQ_DEPTH);
+    s_tx_count++;
+    return true;
+}
+
+static uint8_t *txq_front(void)
+{
+    if (s_tx_count == 0) return NULL;
+    return s_txq[s_tx_head];
+}
+
+static void txq_pop(void)
+{
+    if (s_tx_count == 0) return;
+    s_tx_head = (uint8_t)((s_tx_head + 1) % USB_HID_TXQ_DEPTH);
+    s_tx_count--;
+}
+
+// Kick off sending the front of the queue if idle.
+static int tx_try_send(void)
+{
+    if (s_in_busy) return 0;
+    uint8_t *next = txq_front();
+    if (!next) return 0;
+    if (!tud_hid_ready()) return -2;
+    s_in_busy = true;
+    if (!tud_hid_report(0, next, USB_HID_REPORT_LEN)) {
+        s_in_busy = false;
+        return -3;
+    }
+    return 0;
+}
 
 // FIDO/U2F HID report descriptor (64-byte IN/OUT).
 static const uint8_t s_hid_report_desc[] = {
@@ -99,6 +142,8 @@ void tud_hid_report_complete_cb(uint8_t itf, uint8_t const *report, uint16_t len
     (void)report;
     (void)len;
     s_in_busy = false;
+    txq_pop();
+    (void)tx_try_send();
 }
 
 int usb_hid_init(usb_hid_out_cb_t cb, void *user)
@@ -145,24 +190,8 @@ int usb_hid_send_report(const uint8_t *report, size_t len)
     if (len != USB_HID_REPORT_LEN) {
         return -1;
     }
-    // Wait for any in-flight IN transfer to finish.
-    for (int tries = 0; tries < 200 && s_in_busy; tries++) { // ~200ms max
-        tud_task(); // pump TinyUSB state so completions fire
-        vTaskDelay(pdMS_TO_TICKS(1));
+    if (!txq_push(report)) {
+        return -4; // queue full
     }
-    if (s_in_busy) return -2;
-    s_in_busy = true;
-    for (int tries = 0; tries < 200; tries++) {
-        if (tud_hid_ready()) break;
-        tud_task();
-        vTaskDelay(pdMS_TO_TICKS(1));
-    }
-    if (!tud_hid_ready()) { s_in_busy = false; return -2; }
-
-    const bool ok = tud_hid_report(0, report, (uint16_t)len);
-    if (!ok) {
-        s_in_busy = false;
-        return -3;
-    }
-    return 0;
+    return tx_try_send();
 }

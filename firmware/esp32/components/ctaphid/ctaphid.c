@@ -53,17 +53,10 @@ static void send_error(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t err)
     ctx->io.send_report(ctx->io.send_user, r);
 }
 
-// send_report wrapper that waits briefly if HID IN endpoint is busy (-2).
+// Thin wrapper; pacing is handled in usb_hid via queuing.
 static int send_report_retry(ctaphid_ctx_t *ctx, const uint8_t *r)
 {
-    int rc = 0;
-    int tries = 0;
-    do {
-        rc = ctx->io.send_report(ctx->io.send_user, r);
-        if (rc != -2) break;
-        vTaskDelay(pdMS_TO_TICKS(2));
-    } while (++tries < 20); // up to ~40ms
-    return rc;
+    return ctx->io.send_report(ctx->io.send_user, r);
 }
 
 static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_t *payload, uint16_t len)

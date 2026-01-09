@@ -10,6 +10,12 @@ set(RUST_DIR "${CMAKE_SOURCE_DIR}/core/rust")
 set(RUST_TARGET "xtensa-esp32s3-espidf")
 set(RUST_LIB "${RUST_DIR}/target/${RUST_TARGET}/release/libcore.a")
 
+file(GLOB_RECURSE RUST_SOURCES CONFIGURE_DEPENDS
+    ${RUST_DIR}/src/*.rs
+    ${RUST_DIR}/Cargo.toml
+    ${RUST_DIR}/Cargo.lock
+)
+
 add_custom_command(
     OUTPUT ${RUST_LIB}
     COMMAND ${CMAKE_COMMAND} -E env "PATH=$ENV{HOME}/.cargo/bin:$ENV{PATH}"
@@ -18,6 +24,7 @@ add_custom_command(
             -Z build-std-features=compiler-builtins-mem
             --target ${RUST_TARGET}
     WORKING_DIRECTORY ${RUST_DIR}
+    DEPENDS ${RUST_SOURCES}
     COMMENT "Building Rust core (${RUST_TARGET})"
     VERBATIM
 )

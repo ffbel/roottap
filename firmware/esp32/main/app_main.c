@@ -13,6 +13,8 @@
 #include "ctaphid.h"
 // #include "usb_cdc_cmd.h"
 
+void app_main(void);
+
 static const char *TAG = "main";
 
 #define LED_GPIO GPIO_NUM_21   // adjust if LED uses a different pin

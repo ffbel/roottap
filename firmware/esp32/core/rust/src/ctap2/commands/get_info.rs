@@ -1,10 +1,6 @@
 use crate::core_api::CoreCtx;
 use crate::ctap2::{cbor, constants, status::CtapStatus};
 
-const AAGUID: [u8; 16] = [
-    0x52, 0x4f, 0x4f, 0x54, 0x54, 0x41, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-];
-
 pub fn handle(_ctx: &mut CoreCtx, _cbor_req: &[u8], out: &mut [u8]) -> Result<usize, CtapStatus> {
     let mut w = cbor::Writer::new(out);
 
@@ -17,7 +13,7 @@ pub fn handle(_ctx: &mut CoreCtx, _cbor_req: &[u8], out: &mut [u8]) -> Result<us
 
     // aaguid
     w.u8(3)?;
-    w.bstr(&AAGUID)?;
+    w.bstr(&constants::AAGUID)?;
 
     // options
     w.u8(4)?;

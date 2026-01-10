@@ -17,6 +17,7 @@ pub enum CtapStatus {
     InvalidCbor = 0x12,
     MissingParameter = 0x14,
 
+    UnsupportedAlgorithm = 0x26,
     OperationDenied = 0x27,
     KeyStoreFull = 0x28,
     NoCredentials = 0x2E,

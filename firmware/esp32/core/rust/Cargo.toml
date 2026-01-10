@@ -13,3 +13,6 @@ lto = true
 codegen-units = 1
 
 [dependencies]
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
+rand_core = { version = "0.6", default-features = false }
+sha2 = { version = "0.10", default-features = false }

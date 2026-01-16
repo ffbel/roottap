@@ -53,7 +53,7 @@ struct ParsedRequest<'a> {
     rp_id: &'a str,
     user_id: [u8; MAX_USER_ID_SIZE],
     user_id_len: u8,
-    _client_data_hash: [u8; 32],
+    client_data_hash: [u8; 32],
     up: bool,
     uv: bool,
     _rk: bool,
@@ -111,14 +111,14 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
 
     // attestationObject (fmt = "none", empty attStmt)
     let mut w = cbor::Writer::new(out);
-    // Canonical key order by bytewise sort: "fmt" (len3), "attStmt" (len7), "authData" (len8).
-    w.map(3)?;
-    w.tstr("fmt")?;
+    // CTAP2 encodes attestationObject as a CBOR map with numeric keys: 1=fmt, 2=authData, 3=attStmt
+    w.map(3)?;        // 3 pairs
+    w.u8(1)?;         // fmt
     w.tstr("none")?;
-    w.tstr("attStmt")?;
-    w.map(0)?;
-    w.tstr("authData")?;
+    w.u8(2)?;         // authData
     w.bstr(&auth_data[..auth_len])?;
+    w.u8(3)?;         // attStmt
+    w.map(0)?;        // empty map
 
     Ok(w.len())
 }
@@ -185,19 +185,19 @@ fn encode_cose_public_key(pk: &PublicKey, out: &mut [u8]) -> Result<usize, CtapS
     let x = point.x().ok_or(CtapStatus::Other)?;
     let y = point.y().ok_or(CtapStatus::Other)?;
 
-    // Canonical key order (CBOR): -3, -2, -1, 1, 3
+    // Canonical key order (CBOR): 1, 3, -1, -2, -3
     let mut w = cbor::Writer::new(out);
     w.map(5)?;
-    w.nint(-3)?;
-    w.bstr(y.as_ref())?;
-    w.nint(-2)?;
-    w.bstr(x.as_ref())?;
-    w.nint(-1)?;
-    w.u8(1)?; // crv: P-256
-    w.u8(1)?;
-    w.u8(2)?; // kty: EC2
+    w.u8(1)?; // kty: EC2
+    w.u8(2)?;
     w.u8(3)?;
     w.nint(ES256_ALG)?;
+    w.nint(-1)?; // crv: P-256
+    w.u8(1)?;
+    w.nint(-2)?; // x
+    w.bstr(x.as_ref())?;
+    w.nint(-3)?; // y
+    w.bstr(y.as_ref())?;
     Ok(w.len())
 }
 
@@ -247,7 +247,7 @@ fn parse_make_credential<'a>(reader: &mut cbor::Reader<'a>) -> Result<ParsedRequ
         rp_id,
         user_id,
         user_id_len,
-        _client_data_hash: client_data_hash,
+        client_data_hash,
         up: opts.up,
         uv: opts.uv,
         _rk: opts.rk,

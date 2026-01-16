@@ -1,6 +1,8 @@
 #include "ctaphid.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_system.h"
@@ -12,10 +14,12 @@
 static const char *TAG = "ctaphid";
 
 // ---- internal constants ----
-#define INIT_PAYLOAD_MAX (CTAPHID_REPORT_LEN - 7)  // 57
-#define CONT_PAYLOAD_MAX (CTAPHID_REPORT_LEN - 5)  // 59
-#define MAX_MSG_SIZE     1024                      // tune later
-#define MSG_TIMEOUT_US   (3 * 1000 * 1000ULL)      // 3s reassembly timeout
+#define INIT_PAYLOAD_MAX   (CTAPHID_REPORT_LEN - 7)  // 57
+#define CONT_PAYLOAD_MAX   (CTAPHID_REPORT_LEN - 5)  // 59
+#define MSG_TIMEOUT_US     (3 * 1000 * 1000ULL)      // 3s reassembly timeout
+#define WORK_QUEUE_DEPTH   2
+#define WORKER_STACK_BYTES (8 * 1024)                // give CBOR/crypto more room
+#define WORKER_STACK_WORDS (WORKER_STACK_BYTES / sizeof(StackType_t))
 
 // CTAPHID error codes (payload for CTAPHID_ERROR)
 #define ERR_INVALID_CMD   0x01
@@ -24,6 +28,16 @@ static const char *TAG = "ctaphid";
 #define ERR_INVALID_SEQ   0x04
 #define ERR_MSG_TIMEOUT   0x05
 #define ERR_CHANNEL_BUSY  0x06
+
+typedef struct {
+    uint32_t cid;
+    uint8_t cmd;
+    uint16_t len;
+    uint8_t payload[CTAPHID_MAX_MSG_SIZE];
+} ctap_work_item_t;
+
+static void handle_complete_message(ctaphid_ctx_t *ctx, const ctap_work_item_t *item);
+static void ctap_worker_task(void *arg);
 
 // ---- helpers ----
 static uint32_t be32(const uint8_t *p) {
@@ -43,6 +57,24 @@ static void put_be16(uint8_t *p, uint16_t v) {
     p[1] = v & 0xFF;
 }
 
+static int send_report_locked(ctaphid_ctx_t *ctx, const uint8_t *r)
+{
+    int rc = 0;
+    if (ctx->tx_mutex) {
+        if (xSemaphoreTake(ctx->tx_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+            ESP_LOGW(TAG, "send_report lock timeout");
+            return -10;
+        }
+    }
+
+    rc = ctx->io.send_report(ctx->io.send_user, r);
+
+    if (ctx->tx_mutex) {
+        xSemaphoreGive(ctx->tx_mutex);
+    }
+    return rc;
+}
+
 static void send_error(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t err)
 {
     uint8_t r[CTAPHID_REPORT_LEN] = {0};
@@ -50,13 +82,13 @@ static void send_error(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t err)
     r[4] = (uint8_t)(CTAPHID_ERROR | 0x80);
     put_be16(&r[5], 1);
     r[7] = err;
-    ctx->io.send_report(ctx->io.send_user, r);
+    (void)send_report_locked(ctx, r);
 }
 
 // Thin wrapper; pacing is handled in usb_hid via queuing.
 static int send_report_retry(ctaphid_ctx_t *ctx, const uint8_t *r)
 {
-    return ctx->io.send_report(ctx->io.send_user, r);
+    return send_report_locked(ctx, r);
 }
 
 static void send_msg(ctaphid_ctx_t *ctx, uint32_t cid, uint8_t cmd, const uint8_t *payload, uint16_t len)
@@ -124,17 +156,37 @@ void ctaphid_init(ctaphid_ctx_t *ctx, const ctaphid_io_t *io)
         int rc = core_init(ctx->core_mem, sizeof(ctx->core_mem));
         ESP_LOGI(TAG, "core_init rc=%d", rc);
     }
+
+    ctx->tx_mutex = xSemaphoreCreateMutex();
+    if (!ctx->tx_mutex) {
+        ESP_LOGW(TAG, "failed to create tx mutex; sends may race");
+    }
+
+    ctx->req_queue = xQueueCreate(WORK_QUEUE_DEPTH, sizeof(ctap_work_item_t));
+    if (!ctx->req_queue) {
+        ESP_LOGE(TAG, "failed to create CTAP work queue; will run inline");
+    } else {
+        BaseType_t rc = xTaskCreate(
+            ctap_worker_task,
+            "ctap_worker",
+            WORKER_STACK_WORDS,
+            ctx,
+            tskIDLE_PRIORITY + 4,
+            &ctx->worker_task
+        );
+        if (rc != pdPASS) {
+            ESP_LOGE(TAG, "failed to start ctap_worker_task");
+            ctx->worker_task = NULL;
+        }
+    }
 }
 
-static void handle_complete_message(ctaphid_ctx_t *ctx)
+static void handle_complete_message(ctaphid_ctx_t *ctx, const ctap_work_item_t *item)
 {
-    const uint8_t *msg = ctx->buf;
-    size_t msg_len = ctx->cur_len;
-    uint32_t cid = ctx->cur_cid;
-    uint8_t cmd = ctx->cur_cmd;
-
-    // reset reassembly state
-    reset_reassembly(ctx);
+    const uint8_t *msg = item->payload;
+    size_t msg_len = item->len;
+    uint32_t cid = item->cid;
+    uint8_t cmd = item->cmd;
 
     if (cmd == CTAPHID_PING) {
         send_msg(ctx, cid, CTAPHID_PING, msg, (uint16_t)msg_len);
@@ -163,6 +215,48 @@ static void handle_complete_message(ctaphid_ctx_t *ctx)
     }
 
     send_error(ctx, cid, ERR_INVALID_CMD);
+}
+
+static void ctap_worker_task(void *arg)
+{
+    ctaphid_ctx_t *ctx = (ctaphid_ctx_t *)arg;
+    ctap_work_item_t item;
+
+    while (1) {
+        if (xQueueReceive(ctx->req_queue, &item, portMAX_DELAY) == pdTRUE) {
+            handle_complete_message(ctx, &item);
+        }
+    }
+}
+
+static void dispatch_complete_message(ctaphid_ctx_t *ctx)
+{
+    if (ctx->cur_len > CTAPHID_MAX_MSG_SIZE) {
+        send_error(ctx, ctx->cur_cid, ERR_INVALID_LEN);
+        reset_reassembly(ctx);
+        return;
+    }
+
+    ctap_work_item_t item = {
+        .cid = ctx->cur_cid,
+        .cmd = ctx->cur_cmd,
+        .len = ctx->cur_len,
+    };
+
+    if (item.len) {
+        memcpy(item.payload, ctx->buf, item.len);
+    }
+
+    reset_reassembly(ctx);
+
+    if (ctx->req_queue && ctx->worker_task) {
+        if (xQueueSend(ctx->req_queue, &item, 0) != pdTRUE) {
+            ESP_LOGW(TAG, "ctap work queue full cid=%08x", (unsigned)item.cid);
+            send_error(ctx, item.cid, ERR_CHANNEL_BUSY);
+        }
+    } else {
+        handle_complete_message(ctx, &item);
+    }
 }
 
 void ctaphid_on_report(ctaphid_ctx_t *ctx, const uint8_t *report, size_t len)
@@ -195,7 +289,7 @@ void ctaphid_on_report(ctaphid_ctx_t *ctx, const uint8_t *report, size_t len)
         const uint8_t *p = &report[7];
         uint16_t n = total > INIT_PAYLOAD_MAX ? INIT_PAYLOAD_MAX : total;
 
-        if (total > MAX_MSG_SIZE) { send_error(ctx, cid, ERR_INVALID_LEN); return; }
+        if (total > CTAPHID_MAX_MSG_SIZE) { send_error(ctx, cid, ERR_INVALID_LEN); return; }
 
         if (cmd == CTAPHID_CANCEL) {
             if (total != 0) { send_error(ctx, cid, ERR_INVALID_LEN); return; }
@@ -239,12 +333,17 @@ void ctaphid_on_report(ctaphid_ctx_t *ctx, const uint8_t *report, size_t len)
         ctx->started_at_us = (uint64_t)now_us;
 
         if (n) {
+            if (n > sizeof(ctx->buf)) {
+                send_error(ctx, cid, ERR_INVALID_LEN);
+                reset_reassembly(ctx);
+                return;
+            }
             memcpy(ctx->buf, p, n);
             ctx->got = n;
         }
 
         if (ctx->got >= ctx->cur_len) {
-            handle_complete_message(ctx);
+            dispatch_complete_message(ctx);
         }
         return;
     } else {
@@ -253,18 +352,23 @@ void ctaphid_on_report(ctaphid_ctx_t *ctx, const uint8_t *report, size_t len)
         const uint8_t *p = &report[5];
 
         if (ctx->cur_len == 0) { send_error(ctx, cid, ERR_INVALID_SEQ); return; }
+        if (ctx->cur_len > CTAPHID_MAX_MSG_SIZE) { reset_reassembly(ctx); send_error(ctx, cid, ERR_INVALID_LEN); return; }
         if (cid != ctx->cur_cid) { send_error(ctx, cid, ERR_INVALID_SEQ); return; }
-        if (seq != ctx->next_seq) { send_error(ctx, cid, ERR_INVALID_SEQ); return; }
+        if (seq != ctx->next_seq) { send_error(ctx, cid, ERR_INVALID_SEQ); reset_reassembly(ctx); return; }
+        if (ctx->got > ctx->cur_len) { reset_reassembly(ctx); send_error(ctx, cid, ERR_INVALID_LEN); return; }
 
         uint16_t remaining = (uint16_t)(ctx->cur_len - ctx->got);
+        if (remaining == 0) { reset_reassembly(ctx); send_error(ctx, cid, ERR_INVALID_SEQ); return; }
+
         uint16_t n = remaining > CONT_PAYLOAD_MAX ? CONT_PAYLOAD_MAX : remaining;
+        if ((ctx->got + n) > CTAPHID_MAX_MSG_SIZE) { reset_reassembly(ctx); send_error(ctx, cid, ERR_INVALID_LEN); return; }
 
         memcpy(ctx->buf + ctx->got, p, n);
         ctx->got += n;
         ctx->next_seq++;
 
         if (ctx->got >= ctx->cur_len) {
-            handle_complete_message(ctx);
+            dispatch_complete_message(ctx);
         }
     }
 }

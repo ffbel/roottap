@@ -2,12 +2,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define CTAPHID_REPORT_LEN 64
 #define CTAPHID_BROADCAST_CID 0xFFFFFFFFu
+#define CTAPHID_MAX_MSG_SIZE 1024  // spec requires >=1024 unless maxMsgSize advertised
 
 // CTAPHID commands (unframed values)
 #define CTAPHID_PING   0x01
@@ -35,11 +41,16 @@ typedef struct ctaphid_ctx {
     uint16_t got;
     uint8_t  next_seq;
     uint64_t started_at_us;
-    uint8_t  buf[1024];   // MAX_MSG_SIZE in ctaphid.c
+    uint8_t  buf[CTAPHID_MAX_MSG_SIZE];
 
     // core workspace
     uint8_t core_mem[512];
-    uint8_t core_resp[1024];
+    uint8_t core_resp[CTAPHID_MAX_MSG_SIZE];
+
+    // worker plumbing
+    TaskHandle_t worker_task;
+    QueueHandle_t req_queue;
+    SemaphoreHandle_t tx_mutex;
 } ctaphid_ctx_t;
 
 void ctaphid_init(ctaphid_ctx_t *ctx, const ctaphid_io_t *io);

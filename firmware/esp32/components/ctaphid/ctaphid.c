@@ -149,6 +149,8 @@ static void handle_complete_message(ctaphid_ctx_t *ctx)
             ctx->core_resp, sizeof(ctx->core_resp),
             &out_len
         );
+        ESP_LOGI(TAG, "core_handle_request rc=%d out_len=%u", rc, (unsigned)out_len);
+
 
         if (rc != 0) {
             // For CTAP2 over CBOR, return 1-byte CTAP status in CBOR response payload.

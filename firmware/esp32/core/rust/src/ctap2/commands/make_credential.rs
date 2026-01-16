@@ -111,13 +111,14 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
 
     // attestationObject (fmt = "none", empty attStmt)
     let mut w = cbor::Writer::new(out);
+    // Canonical key order by bytewise sort: "fmt" (len3), "attStmt" (len7), "authData" (len8).
     w.map(3)?;
-    w.u8(1)?;
+    w.tstr("fmt")?;
     w.tstr("none")?;
-    w.u8(2)?;
-    w.bstr(&auth_data[..auth_len])?;
-    w.u8(3)?;
+    w.tstr("attStmt")?;
     w.map(0)?;
+    w.tstr("authData")?;
+    w.bstr(&auth_data[..auth_len])?;
 
     Ok(w.len())
 }
@@ -184,18 +185,19 @@ fn encode_cose_public_key(pk: &PublicKey, out: &mut [u8]) -> Result<usize, CtapS
     let x = point.x().ok_or(CtapStatus::Other)?;
     let y = point.y().ok_or(CtapStatus::Other)?;
 
+    // Canonical key order (CBOR): -3, -2, -1, 1, 3
     let mut w = cbor::Writer::new(out);
     w.map(5)?;
+    w.nint(-3)?;
+    w.bstr(y.as_ref())?;
+    w.nint(-2)?;
+    w.bstr(x.as_ref())?;
+    w.nint(-1)?;
+    w.u8(1)?; // crv: P-256
     w.u8(1)?;
     w.u8(2)?; // kty: EC2
     w.u8(3)?;
     w.nint(ES256_ALG)?;
-    w.nint(-1)?;
-    w.u8(1)?; // crv: P-256
-    w.nint(-2)?;
-    w.bstr(x.as_ref())?;
-    w.nint(-3)?;
-    w.bstr(y.as_ref())?;
     Ok(w.len())
 }
 

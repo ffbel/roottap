@@ -62,6 +62,7 @@ private fun ScanScreen() {
         )
     }
     val connectionState by gattClient.connectionState.collectAsState()
+    val requestPending by gattClient.requestPending.collectAsState()
 
 
     var hasPerms by remember { mutableStateOf(false) }
@@ -97,7 +98,7 @@ private fun ScanScreen() {
                 }
             }
         }.onFailure {
-            if (it is CancellationException) return@onFailure   // <-- IMPORTANT: ignore normal cancellation
+            if (it is CancellationException) return@onFailure
             error = it.message
             scanning = false
         }
@@ -119,6 +120,24 @@ private fun ScanScreen() {
         gattClient.disconnect()
         devices.clear()
         wasEverConnected = false
+    }
+
+    if (requestPending) {
+        AlertDialog(
+            onDismissRequest = { gattClient.respondToRequest(false) },
+            title = { Text("Approve request?") },
+            text = { Text("The device is requesting your approval.") },
+            confirmButton = {
+                TextButton(onClick = { gattClient.respondToRequest(true) }) {
+                    Text("Approve")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { gattClient.respondToRequest(false) }) {
+                    Text("Deny")
+                }
+            }
+        )
     }
 
     Box(

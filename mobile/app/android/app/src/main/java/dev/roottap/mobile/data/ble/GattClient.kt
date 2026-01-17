@@ -28,6 +28,9 @@ class GattClient(
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState = _connectionState.asStateFlow()
 
+    private val _requestPending = MutableStateFlow(false)
+    val requestPending = _requestPending.asStateFlow()
+
     private val cccdUuid: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private val tag = "RootTapGatt"
     private var notifReady = false
@@ -47,13 +50,23 @@ class GattClient(
     @SuppressLint("MissingPermission")
     fun disconnect() {
         Log.d(tag, "User-initiated disconnect.")
-        // 1. Prevent auto-reconnect by clearing the target device.
         device = null
-        // 2. Trigger GATT disconnection if a GATT object exists.
-        //    The callback will handle cleanup and final state change.
         gatt?.disconnect()
-        // 3. Update UI immediately for responsiveness.
         _connectionState.value = ConnectionState.DISCONNECTED
+        _requestPending.value = false
+    }
+
+    fun respondToRequest(approved: Boolean) {
+        if (!_requestPending.value) return
+        
+        if (approved) {
+            Log.d(tag, "Request approved, sending 0x01")
+            write(byteArrayOf(0x01))
+        } else {
+            Log.d(tag, "Request denied, sending 0x00")
+            write(byteArrayOf(0x00))
+        }
+        _requestPending.value = false
     }
 
     private val cb: BluetoothGattCallback = object : BluetoothGattCallback() {
@@ -62,9 +75,7 @@ class GattClient(
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             val gattDeviceAddress = gatt.device.address
 
-            // An event from a device we don't want to be connected to anymore.
             if (device == null || gattDeviceAddress != device!!.address) {
-                // This can happen if user calls disconnect() then the callback arrives.
                 Log.d(tag, "Ignoring stale callback from $gattDeviceAddress.")
                 gatt.close()
                 return
@@ -76,18 +87,15 @@ class GattClient(
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d(tag, "Disconnected from $gattDeviceAddress")
-                // Always close the gatt object that has disconnected to release resources.
                 gatt.close()
                 this@GattClient.gatt = null
+                _requestPending.value = false
 
-                // Decide what to do next based on whether user wants to be connected.
                 device?.let {
-                    // This was an unexpected disconnect.
                     Log.d(tag, "Reconnecting to ${it.address} ...")
                     _connectionState.value = ConnectionState.CONNECTING
                     this@GattClient.gatt = it.connectGatt(context, false, this, BluetoothDevice.TRANSPORT_LE)
                 } ?: run {
-                    // This was an expected disconnect (user called disconnect()).
                     _connectionState.value = ConnectionState.DISCONNECTED
                 }
             }
@@ -101,7 +109,6 @@ class GattClient(
                 return
             }
 
-            Log.d(tag, "services discovered")
             val svc = gatt.getService(serviceUuid)
             if (svc == null) {
                 Log.e(tag, "Service not found: $serviceUuid")
@@ -121,15 +128,13 @@ class GattClient(
             enableNotifications(gatt, notifyChar!!)
         }
 
-        // For Android 13+ there's also onCharacteristicChanged with value param; this one still works widely.
-        @Deprecated("Deprecated in API 33 but still called on many devices")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (!notifReady) return
             val value = characteristic.value ?: return
             Log.d(tag, "notify ${characteristic.uuid} value=${value.joinToString { "%02X".format(it) }}")
             if (characteristic.uuid == notifyCharUuid && value.isNotEmpty() && value[0].toInt() == 0x01) {
-                // GPIO pressed -> respond with 0x01
-                write(byteArrayOf(0x01))
+                // Instead of auto-responding, trigger a UI request
+                _requestPending.value = true
             }
         }
 
@@ -166,7 +171,6 @@ class GattClient(
 
         c.value = payload
 
-        // Prefer WRITE_NO_RESPONSE if your char supports it (faster).
         val supportsNoResp = (c.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0
         c.writeType = if (supportsNoResp)
             BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE

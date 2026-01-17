@@ -18,22 +18,29 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
     let req = parse_get_assertion(&mut reader)?;
 
     let rp_hash = sha256(req.rp_id);
-    let cred = find_credential(ctx, &req.allow_cred_id, &rp_hash)?;
-
-    // TODO: wire to real user-presence + keepalive once transport exposes it.
-    require_user_presence()?;
-
     let mut auth_data = [0u8; AUTH_DATA_LEN];
-    let new_sign_count = cred.sign_count.wrapping_add(1);
-    let auth_len = build_auth_data(&rp_hash, new_sign_count, &mut auth_data)?;
-    cred.sign_count = new_sign_count;
-
     let mut signed_data = [0u8; SIG_INPUT_LEN];
+    let mut auth_len = 0usize;
+    let mut priv_key = [0u8; 32];
+
+    {
+        let cred = find_credential(ctx, &req.allow_cred_id, &rp_hash)?;
+
+        // TODO: wire to real user-presence + keepalive once transport exposes it.
+        require_user_presence()?;
+
+        let new_sign_count = cred.sign_count.wrapping_add(1);
+        auth_len = build_auth_data(&rp_hash, new_sign_count, &mut auth_data)?;
+        cred.sign_count = new_sign_count;
+        priv_key.copy_from_slice(&cred.private_key);
+    }
+    ctx.mark_dirty();
+
     signed_data[..auth_len].copy_from_slice(&auth_data[..auth_len]);
     signed_data[auth_len..auth_len + req.client_data_hash.len()]
         .copy_from_slice(&req.client_data_hash);
 
-    let signing_key = SigningKey::from_slice(&cred.private_key).map_err(|_| CtapStatus::Other)?;
+    let signing_key = SigningKey::from_slice(&priv_key).map_err(|_| CtapStatus::Other)?;
     let signature: Signature = signing_key
         .try_sign(&signed_data[..auth_len + req.client_data_hash.len()])
         .map_err(|_| CtapStatus::Other)?;

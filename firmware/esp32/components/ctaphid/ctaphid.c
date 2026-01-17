@@ -4,14 +4,19 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_err.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "nvs_flash.h"
 #include <string.h>
 
 #include "core_api.h"   // your Rust FFI header
 
 static const char *TAG = "ctaphid";
+
+#define CTAP_NVS_NAMESPACE "ctap"
+#define CTAP_NVS_KEY "core_state"
 
 // ---- internal constants ----
 #define INIT_PAYLOAD_MAX   (CTAPHID_REPORT_LEN - 7)  // 57
@@ -38,6 +43,9 @@ typedef struct {
 
 static void handle_complete_message(ctaphid_ctx_t *ctx, const ctap_work_item_t *item);
 static void ctap_worker_task(void *arg);
+static esp_err_t load_core_state(ctaphid_ctx_t *ctx);
+static esp_err_t save_core_state(ctaphid_ctx_t *ctx);
+static void persist_if_dirty(ctaphid_ctx_t *ctx);
 
 // ---- helpers ----
 static uint32_t be32(const uint8_t *p) {
@@ -132,6 +140,89 @@ static void reset_reassembly(ctaphid_ctx_t *ctx)
     ctx->started_at_us = 0;
 }
 
+static esp_err_t load_core_state(ctaphid_ctx_t *ctx)
+{
+    if (ctx->persist_len == 0) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    nvs_handle_t nvs = 0;
+    esp_err_t err = nvs_open(CTAP_NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    size_t len = ctx->persist_len;
+    if (len > sizeof(ctx->core_mem)) {
+        nvs_close(nvs);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint8_t buf[sizeof(ctx->core_mem)];
+    err = nvs_get_blob(nvs, CTAP_NVS_KEY, buf, &len);
+    nvs_close(nvs);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (len != ctx->persist_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    int rc = core_load_state(ctx->core_mem, sizeof(ctx->core_mem), buf, len);
+    return rc == 0 ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t save_core_state(ctaphid_ctx_t *ctx)
+{
+    if (ctx->persist_len == 0) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint8_t buf[sizeof(ctx->core_mem)];
+    size_t out_len = 0;
+
+    int rc = core_save_state(ctx->core_mem, sizeof(ctx->core_mem), buf, sizeof(buf), &out_len);
+    if (rc != 0) {
+        return ESP_FAIL;
+    }
+    if (out_len != ctx->persist_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    nvs_handle_t nvs = 0;
+    esp_err_t err = nvs_open(CTAP_NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = nvs_set_blob(nvs, CTAP_NVS_KEY, buf, out_len);
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+
+    if (err == ESP_OK) {
+        core_mark_clean(ctx->core_mem, sizeof(ctx->core_mem));
+    }
+    return err;
+}
+
+static void persist_if_dirty(ctaphid_ctx_t *ctx)
+{
+    if (ctx->persist_len == 0) {
+        return;
+    }
+    if (!core_is_dirty(ctx->core_mem, sizeof(ctx->core_mem))) {
+        return;
+    }
+
+    esp_err_t err = save_core_state(ctx);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to persist core state: %s", esp_err_to_name(err));
+    }
+}
+
 static uint32_t alloc_cid(void)
 {
     uint32_t cid = 0;
@@ -147,6 +238,13 @@ void ctaphid_init(ctaphid_ctx_t *ctx, const ctaphid_io_t *io)
 {
     memset(ctx, 0, sizeof(*ctx));
     ctx->io = *io;
+    ctx->persist_len = core_persist_size();
+
+    if (ctx->persist_len > sizeof(ctx->core_mem)) {
+        ESP_LOGE(TAG, "persist_len=%u too big for core_mem=%u; disabling persistence",
+                 (unsigned)ctx->persist_len, (unsigned)sizeof(ctx->core_mem));
+        ctx->persist_len = 0;
+    }
 
     // init Rust core (placement)
     size_t need = core_ctx_size();
@@ -155,6 +253,16 @@ void ctaphid_init(ctaphid_ctx_t *ctx, const ctaphid_io_t *io)
     } else {
         int rc = core_init(ctx->core_mem, sizeof(ctx->core_mem));
         ESP_LOGI(TAG, "core_init rc=%d", rc);
+        if (rc == 0 && ctx->persist_len) {
+            esp_err_t err = load_core_state(ctx);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "loaded core state from NVS (%u bytes)", (unsigned)ctx->persist_len);
+            } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+                ESP_LOGI(TAG, "no stored core state found; starting fresh");
+            } else {
+                ESP_LOGW(TAG, "failed to load core state (err=%s)", esp_err_to_name(err));
+            }
+        }
     }
 
     ctx->tx_mutex = xSemaphoreCreateMutex();
@@ -211,6 +319,7 @@ static void handle_complete_message(ctaphid_ctx_t *ctx, const ctap_work_item_t *
             return;
         }
         send_msg(ctx, cid, CTAPHID_CBOR, ctx->core_resp, (uint16_t)out_len);
+        persist_if_dirty(ctx);
         return;
     }
 

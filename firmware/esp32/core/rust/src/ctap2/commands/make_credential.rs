@@ -108,6 +108,7 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
 
     // Persist only after successful construction
     *cred_slot = new_cred;
+    ctx.mark_dirty();
 
     // attestationObject (fmt = "none", empty attStmt)
     let mut w = cbor::Writer::new(out);

@@ -46,6 +46,7 @@ typedef struct ctaphid_ctx {
     // core workspace
     uint8_t core_mem[512];
     uint8_t core_resp[CTAPHID_MAX_MSG_SIZE];
+    size_t persist_len;
 
     // worker plumbing
     TaskHandle_t worker_task;

@@ -1,5 +1,6 @@
 use crate::core_api::{CoreCtx, Credential, CREDENTIAL_ID_SIZE};
 use crate::ctap2::{cbor, status::CtapStatus};
+use crate::ctap2::user_presence::require_user_presence;
 use p256::ecdsa::{signature::Signer, DerSignature, Signature, SigningKey};
 use sha2::{Digest, Sha256};
 
@@ -20,20 +21,19 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
     let rp_hash = sha256(req.rp_id);
     let mut auth_data = [0u8; AUTH_DATA_LEN];
     let mut signed_data = [0u8; SIG_INPUT_LEN];
-    let mut auth_len = 0usize;
     let mut priv_key = [0u8; 32];
 
-    {
+    let auth_len = {
         let cred = find_credential(ctx, &req.allow_cred_id, &rp_hash)?;
 
-        // TODO: wire to real user-presence + keepalive once transport exposes it.
         require_user_presence()?;
 
         let new_sign_count = cred.sign_count.wrapping_add(1);
-        auth_len = build_auth_data(&rp_hash, new_sign_count, &mut auth_data)?;
+        let auth_len = build_auth_data(&rp_hash, new_sign_count, &mut auth_data)?;
         cred.sign_count = new_sign_count;
         priv_key.copy_from_slice(&cred.private_key);
-    }
+        auth_len
+    };
     ctx.mark_dirty();
 
     signed_data[..auth_len].copy_from_slice(&auth_data[..auth_len]);
@@ -174,11 +174,6 @@ fn encode_credential_descriptor(
     w.bstr(cred_id)?;
     w.tstr("type")?;
     w.tstr("public-key")
-}
-
-fn require_user_presence() -> Result<(), CtapStatus> {
-    // Placeholder: always satisfied for now.
-    Ok(())
 }
 
 fn sha256(data: &str) -> [u8; 32] {

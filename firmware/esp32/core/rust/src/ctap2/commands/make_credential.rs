@@ -1,5 +1,6 @@
 use crate::core_api::{CoreCtx, Credential, CREDENTIAL_ID_SIZE, MAX_USER_ID_SIZE};
 use crate::ctap2::{cbor, constants, status::CtapStatus};
+use crate::ctap2::user_presence::require_user_presence;
 
 use p256::{EncodedPoint, PublicKey, SecretKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
@@ -69,6 +70,8 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
     let mut reader = cbor::Reader::new(cbor_req);
     let req = parse_make_credential(&mut reader)?;
     let rp_hash = sha256(req.rp_id);
+    let _ = req.client_data_hash; // currently unused until attestation statement is added
+    require_user_presence()?;
     let mut rng = EspRng;
 
     let cred_slot = ctx.alloc_credential_slot().ok_or(CtapStatus::KeyStoreFull)?;
@@ -96,7 +99,7 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
 
     // authData
     let mut auth_data = [0u8; 256];
-    let flags = build_flags(req.up, req.uv);
+    let flags = build_flags(req.up, req.uv, true);
     let auth_len = build_auth_data(
         &rp_hash,
         flags,
@@ -124,10 +127,11 @@ pub fn handle(ctx: &mut CoreCtx, cbor_req: &[u8], out: &mut [u8]) -> Result<usiz
     Ok(w.len())
 }
 
-fn build_flags(up: bool, uv: bool) -> u8 {
-    // User presence is always asserted for this prototype.
-    let _ = up;
-    let mut flags = FLAG_AT | FLAG_UP;
+fn build_flags(up: bool, uv: bool, user_present: bool) -> u8 {
+    let mut flags = FLAG_AT;
+    if up && user_present {
+        flags |= FLAG_UP;
+    }
     if uv {
         flags |= FLAG_UV;
     }

@@ -3,7 +3,7 @@ idf_component_register(
     INCLUDE_DIRS 
         "."
         "../core/include"
-    REQUIRES button led button_ble button_gpio nvs_flash ctaphid usb_hid usb_dev
+    REQUIRES button led button_ble button_gpio user_presence nvs_flash ctaphid usb_hid usb_dev
 )
 
 set(RUST_DIR "${CMAKE_SOURCE_DIR}/core/rust")
@@ -32,7 +32,12 @@ add_custom_command(
 add_custom_target(rust_core ALL DEPENDS ${RUST_LIB})
 add_dependencies(${COMPONENT_LIB} rust_core)
 
-target_link_libraries(${COMPONENT_LIB} INTERFACE ${RUST_LIB})
+add_library(rust_core_prebuilt STATIC IMPORTED GLOBAL)
+set_property(TARGET rust_core_prebuilt PROPERTY IMPORTED_LOCATION ${RUST_LIB})
+add_dependencies(rust_core_prebuilt rust_core)
+target_link_libraries(rust_core_prebuilt INTERFACE idf::user_presence)
+
+target_link_libraries(${COMPONENT_LIB} INTERFACE rust_core_prebuilt)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wall

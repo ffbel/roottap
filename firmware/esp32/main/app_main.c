@@ -74,13 +74,11 @@ void app_main(void)
 
     button_init();
     ESP_ERROR_CHECK(button_gpio_init());
+    ESP_ERROR_CHECK(button_ble_init());
 
 
     // led_t led;
     // led_init(&led, LED_GPIO, true);
-
-    // vTaskDelay(pdMS_TO_TICKS(500));
-    // ESP_ERROR_CHECK(button_ble_init());
 
     // QueueHandle_t q = button_get_event_queue();
     // button_event_t ev;
